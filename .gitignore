@@ -488,3 +488,6 @@ publish/
 
 # Правило *.app выше задевает папку проекта на Windows
 !/src/ZapretPro.App/
+
+# Готовые exe из build.ps1
+dist/

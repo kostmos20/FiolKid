@@ -7,7 +7,10 @@
         mc:Ignorable="d"
         Title="Одна кнопка" Height="600" Width="480"
         WindowStartupLocation="CenterScreen" FontSize="18">
-    <Grid>
-
+    <Grid Margin="24">
+        <TextBlock VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap">
+            Это заготовка программы «Одна кнопка».<LineBreak/><LineBreak/>
+            Большая кнопка и индикаторы появятся на этапе 4.
+        </TextBlock>
     </Grid>
 </Window>

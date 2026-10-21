@@ -9,6 +9,16 @@
     <RootNamespace>ZapretPro.KeyTool</RootNamespace>
   </PropertyGroup>
 
+  <!-- Как и основное приложение: один exe, .NET ставить не нужно -->
+  <PropertyGroup>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <SatelliteResourceLanguages>ru</SatelliteResourceLanguages>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\ZapretPro.Core\ZapretPro.Core.csproj" />
   </ItemGroup>
