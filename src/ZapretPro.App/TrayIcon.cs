@@ -90,7 +90,7 @@ public sealed class TrayIcon : IDisposable
         {
             _problemNotified = true;
             _icon.ShowBalloonTip(10000, "Не всё работает",
-                "Само не наладилось. Открой программу и нажми «Отчёт внуку».", Forms.ToolTipIcon.Warning);
+                "Само не наладилось. Открой программу, вкладку «Журнал», и пришли отчёт.", Forms.ToolTipIcon.Warning);
         }
     }
 

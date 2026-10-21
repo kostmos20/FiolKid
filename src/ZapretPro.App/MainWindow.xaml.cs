@@ -24,7 +24,37 @@ public partial class MainWindow : Window
         _engine.StatusChanged += () => Dispatcher.BeginInvoke(Refresh);
         TelegramCard.ActionClick += (_, _) => ConnectTelegram();
         AiCard.ActionClick += (_, _) => PasteKey();
-        Loaded += (_, _) => Refresh();
+
+        LogTab.Init(engine);
+        SettingsTab.Init(engine);
+        LogTab.Toast += ShowToast;
+        SettingsTab.Toast += ShowToast;
+
+        Loaded += (_, _) =>
+        {
+            SelectTab(HomePage);
+            Refresh();
+        };
+    }
+
+    private void HomeTab_Click(object sender, RoutedEventArgs e) => SelectTab(HomePage);
+    private void LogTab_Click(object sender, RoutedEventArgs e) => SelectTab(LogTab);
+    private void SettingsTab_Click(object sender, RoutedEventArgs e) => SelectTab(SettingsTab);
+
+    /// <summary>Показать одну из трёх вкладок и подсветить её кнопку.</summary>
+    private void SelectTab(FrameworkElement page)
+    {
+        foreach (var (tab, button) in new (FrameworkElement, System.Windows.Controls.Button)[]
+                 { (HomePage, HomeTabButton), (LogTab, LogTabButton), (SettingsTab, SettingsTabButton) })
+        {
+            var selected = tab == page;
+            tab.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+            button.Foreground = (Brush)FindResource(selected ? "BlueBrush" : "MutedBrush");
+        }
+        if (page == LogTab)
+            LogTab.Refresh();
+        if (page == SettingsTab)
+            SettingsTab.Refresh();
     }
 
     /// <summary>Перерисовать всё по текущему состоянию.</summary>
@@ -52,7 +82,7 @@ public partial class MainWindow : Window
             _ when problems == 0 => ("Всё работает", "Можно пользоваться"),
             _ when looks[Service.Telegram] == ServiceLook.NeedsConnect && problems == 1
                 => ("Почти всё работает", "Осталось подключить Telegram — нажми «Подключить»"),
-            _ => ("Почти всё работает", "Если не наладится само — нажми «Отчёт внуку»"),
+            _ => ("Почти всё работает", "Если не наладится само — открой «Журнал» и пришли отчёт"),
         };
 
         var color = !on ? (Color)FindResource("BgBottomColor")
@@ -129,22 +159,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Settings_Click(object sender, RoutedEventArgs e) =>
-        new SettingsWindow(_engine) { Owner = this }.ShowDialog();
-
-    private void Report_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Clipboard.SetText(_engine.BuildReport());
-            ShowToast("Отчёт скопирован. Открой переписку с внуком и вставь его (Ctrl+V)");
-        }
-        catch (System.Runtime.InteropServices.COMException)
-        {
-            ShowToast("Не получилось скопировать — попробуй ещё раз");
-        }
-    }
-
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
@@ -174,7 +188,11 @@ public partial class MainWindow : Window
     private void PaintPower(bool on, Color color)
     {
         PowerButton.ApplyTemplate();
-        var glow = (DropShadowEffect)((System.Windows.Shapes.Ellipse)PowerButton.Template.FindName("Glow", PowerButton)).Effect;
+        // Эффект из шаблона WPF может «заморозить» (сделать неизменяемым) — тогда работаем с его копией
+        var glowEllipse = (System.Windows.Shapes.Ellipse)PowerButton.Template.FindName("Glow", PowerButton);
+        if (glowEllipse.Effect.IsFrozen)
+            glowEllipse.Effect = glowEllipse.Effect.Clone();
+        var glow = (DropShadowEffect)glowEllipse.Effect;
         var top = (GradientStop)PowerButton.Template.FindName("FaceTop", PowerButton);
         var bottom = (GradientStop)PowerButton.Template.FindName("FaceBottom", PowerButton);
 

@@ -1,37 +1,45 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using ZapretPro.Core.Key;
 using ZapretPro.Core.Vpn;
 
 namespace ZapretPro.App;
 
-/// <summary>Настройки: ключ VPN, состояние VPN, версии. Простым языком, крупно.</summary>
-public partial class SettingsWindow : Window
+/// <summary>Вкладка «Настройки»: ключ VPN, состояние VPN, версии. Простым языком, крупно.</summary>
+public partial class SettingsPage : UserControl
 {
-    private readonly AppEngine _engine;
+    private AppEngine _engine = null!;
+    private bool _confirmDelete;
 
-    public SettingsWindow(AppEngine engine)
+    public SettingsPage()
     {
         InitializeComponent();
-        _engine = engine;
+    }
 
-        Action refresh = () => Dispatcher.BeginInvoke(Refresh);
-        _engine.StatusChanged += refresh;
-        Closed += (_, _) => _engine.StatusChanged -= refresh;
+    /// <summary>Сообщение для всплывающей подсказки главного окна.</summary>
+    public event Action<string>? Toast;
+
+    public void Init(AppEngine engine)
+    {
+        _engine = engine;
+        _engine.StatusChanged += () => Dispatcher.BeginInvoke(Refresh);
         Refresh();
     }
 
-    private void Refresh()
+    public void Refresh()
     {
         var (keyOk, keyText) = _engine.KeyState();
         KeyText.Text = keyText;
         KeyDot.Fill = Brush(keyOk ? "GreenBrush" : _engine.Keys.HasKey ? "RedBrush" : "AmberBrush");
         PasteKeyButton.Content = _engine.Keys.HasKey ? "Заменить ключ" : "Вставить ключ";
         DeleteKeyButton.Visibility = _engine.Keys.HasKey ? Visibility.Visible : Visibility.Collapsed;
+        if (!_confirmDelete)
+            DeleteKeyButton.Content = "Удалить";
 
         var vpn = _engine.Status.Vpn;
         var (text, color) = !_engine.IsOn
-            ? ("Выключено — включи программу на главном экране", "GrayBrush")
+            ? ("Выключено — включи программу на главной", "GrayBrush")
             : vpn.State switch
             {
                 VpnState.Connected => ("Подключено", "GreenBrush"),
@@ -58,28 +66,34 @@ public partial class SettingsWindow : Window
         var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
         if (string.IsNullOrWhiteSpace(text))
         {
-            MessageBox.Show(this, "Сначала скопируй ключ (он начинается с vpn://), потом нажми эту кнопку.",
-                "Ключ", MessageBoxButton.OK, MessageBoxImage.Information);
+            Toast?.Invoke("Сначала скопируй ключ (он начинается с vpn://), потом нажми эту кнопку");
             return;
         }
         try
         {
             _engine.SaveKey(text);
             Clipboard.Clear();
+            Toast?.Invoke("Ключ вставлен");
         }
         catch (KeyParseException ex)
         {
-            MessageBox.Show(this, ex.Message, "Ключ не подходит", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Toast?.Invoke(ex.Message);
         }
         Refresh();
     }
 
+    /// <summary>Удаление — в два нажатия, чтобы не стереть ключ случайно.</summary>
     private void DeleteKey_Click(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show(this, "Удалить ключ? Нейросети и заблокированные сайты перестанут открываться, пока не вставишь новый.",
-                "Удалить ключ", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        if (!_confirmDelete)
+        {
+            _confirmDelete = true;
+            DeleteKeyButton.Content = "Точно удалить?";
             return;
+        }
+        _confirmDelete = false;
         _engine.DeleteKey();
+        Toast?.Invoke("Ключ удалён");
         Refresh();
     }
 
@@ -90,11 +104,6 @@ public partial class SettingsWindow : Window
         await _engine.CheckNowAsync();
         Refresh();
     }
-
-    private void Details_Click(object sender, RoutedEventArgs e) =>
-        new DiagnosticsWindow(_engine) { Owner = this }.Show();
-
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
     private Brush Brush(string key) => (Brush)FindResource(key);
 }

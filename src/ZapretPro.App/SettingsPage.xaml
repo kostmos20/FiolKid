@@ -1,0 +1,65 @@
+<UserControl x:Class="ZapretPro.App.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="20,4,20,16">
+            <TextBlock Text="Настройки" FontSize="28" FontWeight="SemiBold" Margin="0,0,0,16"/>
+
+            <!-- Ключ -->
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Ключ VPN" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock Text="Нужен для нейросетей и заблокированных сайтов. Его даёт знакомый, он начинается с vpn://"
+                               FontSize="15" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,12"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="KeyDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="KeyText" FontSize="18" Margin="8,0,0,0" TextWrapping="Wrap" MaxWidth="380"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                        <Button x:Name="PasteKeyButton" Style="{StaticResource PillButton}" Content="Вставить ключ" Click="PasteKey_Click"/>
+                        <Button x:Name="DeleteKeyButton" Style="{StaticResource SecondaryButton}" Content="Удалить" Margin="10,0,0,0"
+                                Click="DeleteKey_Click"/>
+                    </StackPanel>
+                    <TextBlock Text="Скопируй ключ из сообщения и нажми «Вставить ключ». Сам ключ на экране не показывается."
+                               FontSize="14" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- VPN -->
+            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                <StackPanel>
+                    <TextBlock Text="Подключение VPN" FontSize="20" FontWeight="SemiBold"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <Ellipse x:Name="VpnDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="VpnText" FontSize="18" Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <TextBlock x:Name="VpnHint" FontSize="15" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
+                               Margin="0,6,0,0" Visibility="Collapsed"/>
+                    <Button x:Name="ReconnectButton" Style="{StaticResource SecondaryButton}" Content="Проверить снова"
+                            HorizontalAlignment="Left" Margin="0,14,0,0" Click="Reconnect_Click"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Обновления -->
+            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                <StackPanel>
+                    <TextBlock Text="Версии" FontSize="20" FontWeight="SemiBold"/>
+                    <ItemsControl x:Name="VersionsList" Margin="0,10,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="0,4">
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Item2}" FontSize="14"
+                                               Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" MaxWidth="220"
+                                               TextAlignment="Right"/>
+                                    <TextBlock Text="{Binding Item1}" FontSize="15"/>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="Список заблокированных сайтов обновляется сам раз в сутки. Автообновление остального появится позже."
+                               FontSize="14" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

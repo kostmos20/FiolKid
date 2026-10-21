@@ -22,7 +22,7 @@ public sealed class ParsedKey
     /// <summary>Имя контейнера из ключа, например «amnezia-awg».</summary>
     public string ContainerName { get; }
 
-    /// <summary>Адрес сервера. Не секрет, но в отчёт для внука не попадает.</summary>
+    /// <summary>Адрес сервера. Не секрет, но в отчёт не попадает.</summary>
     public string? HostName { get; }
 
     /// <summary>Настройки выбранного контейнера, включая ключи шифрования. Наружу не выводить.</summary>

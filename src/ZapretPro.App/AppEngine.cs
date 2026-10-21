@@ -229,7 +229,7 @@ public sealed class AppEngine
         return looks.Any(l => l is ServiceLook.NotWorking or ServiceLook.NeedsConnect) ? Overall.Problem : Overall.Ok;
     }
 
-    /// <summary>Текст для «Отправить отчёт внуку». Ключа, секретов и адреса сервера в нём нет.</summary>
+    /// <summary>Текст отчёта (вкладка «Журнал» → «Скопировать отчёт»). Ключа, секретов и адреса сервера в нём нет.</summary>
     public string BuildReport()
     {
         var s = Status;
