@@ -1,68 +1,140 @@
 ﻿<Window x:Class="ZapretPro.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Одна кнопка — проверка (этап 3)" Height="820" Width="640"
-        WindowStartupLocation="CenterScreen" FontSize="16">
-    <!-- Временное окно для проверки этапов 2–3. Интерфейс для бабушки — этап 4. -->
-    <DockPanel Margin="16">
-        <StackPanel DockPanel.Dock="Top">
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                <Button x:Name="StartButton" Content="Запустить" Padding="16,6" Click="Start_Click"/>
-                <Button x:Name="StopButton" Content="Остановить" Padding="16,6" Margin="8,0,0,0" IsEnabled="False" Click="Stop_Click"/>
-                <Button x:Name="CheckButton" Content="Проверить сейчас" Padding="16,6" Margin="8,0,0,0" IsEnabled="False" Click="Check_Click"/>
+        xmlns:local="clr-namespace:ZapretPro.App"
+        Title="FiolKid" Width="500" Height="790"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
+        WindowStyle="None" AllowsTransparency="False"
+        Background="{StaticResource WindowBrush}" FontFamily="Segoe UI"
+        TextOptions.TextFormattingMode="Display">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Заголовок окна -->
+        <DockPanel Grid.Row="0">
+            <Button DockPanel.Dock="Right" Style="{StaticResource CloseChromeButton}" Content="&#xE8BB;"
+                    ToolTip="Свернуть в трей (программа продолжит работать)" Click="Close_Click"/>
+            <Button DockPanel.Dock="Right" Style="{StaticResource ChromeButton}" Content="&#xE921;" Click="Minimize_Click"/>
+            <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
+                <Ellipse x:Name="TitleDot" Width="8" Height="8" Fill="{StaticResource GrayBrush}"/>
+                <TextBlock Text="FiolKid" Margin="8,0,0,0" FontSize="13" Foreground="{StaticResource MutedBrush}"/>
             </StackPanel>
+        </DockPanel>
 
-            <GroupBox Header="Ключ VPN" Padding="8" Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock x:Name="KeyText" Text="—" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="Вставить ключ из буфера обмена" Padding="12,4" Click="PasteKey_Click"/>
-                        <Button x:Name="DeleteKeyButton" Content="Удалить ключ" Padding="12,4" Margin="8,0,0,0" Click="DeleteKey_Click"/>
+        <!-- Кнопка питания и общее состояние -->
+        <StackPanel Grid.Row="1" Margin="0,14,0,0">
+            <Grid Width="230" Height="230" HorizontalAlignment="Center">
+                <!-- Пульсирующее кольцо, пока подбирается способ -->
+                <Ellipse x:Name="PulseRing" Width="230" Height="230" StrokeThickness="3" Opacity="0"
+                         Stroke="{StaticResource AmberBrush}" RenderTransformOrigin="0.5,0.5">
+                    <Ellipse.RenderTransform>
+                        <ScaleTransform x:Name="PulseScale" ScaleX="0.86" ScaleY="0.86"/>
+                    </Ellipse.RenderTransform>
+                </Ellipse>
+
+                <Button x:Name="PowerButton" Width="190" Height="190" Cursor="Hand" Click="Power_Click"
+                        ToolTip="Включить или выключить">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Grid>
+                                <Ellipse x:Name="Glow" Fill="#FF1A2233" Stroke="#FF2A3550" StrokeThickness="2">
+                                    <Ellipse.Effect>
+                                        <DropShadowEffect x:Name="GlowEffect" BlurRadius="60" ShadowDepth="0" Opacity="0.0" Color="#FF22C55E"/>
+                                    </Ellipse.Effect>
+                                </Ellipse>
+                                <Ellipse x:Name="Face" Margin="14">
+                                    <Ellipse.Fill>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop x:Name="FaceTop" Color="#FF334155" Offset="0"/>
+                                            <GradientStop x:Name="FaceBottom" Color="#FF1E293B" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Ellipse.Fill>
+                                </Ellipse>
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Face" Property="Opacity" Value="0.9"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="Face" Property="Margin" Value="18"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel>
+                        <TextBlock x:Name="PowerGlyph" Text="&#xE7E8;" FontFamily="{StaticResource IconFont}" FontSize="56"
+                                   HorizontalAlignment="Center" Foreground="White"/>
+                        <TextBlock x:Name="PowerLabel" Text="ВКЛЮЧИТЬ" FontSize="17" FontWeight="Bold" Margin="0,10,0,0"
+                                   HorizontalAlignment="Center" Foreground="White"/>
                     </StackPanel>
-                    <TextBlock Text="Скопируй ключ vpn:// и нажми кнопку. Сам ключ на экране не показывается."
-                               TextWrapping="Wrap" FontSize="13" Foreground="Gray" Margin="0,4,0,0"/>
-                </StackPanel>
-            </GroupBox>
-
-            <Grid Margin="0,0,0,12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                    <RowDefinition/><RowDefinition/><RowDefinition/>
-                </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="Состояние:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="0" Grid.Column="1" x:Name="StateText" Text="остановлено" FontWeight="Bold" Margin="0,2"/>
-                <TextBlock Grid.Row="1" Text="Стратегия:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="1" Grid.Column="1" x:Name="StrategyText" Text="—" Margin="0,2"/>
-                <TextBlock Grid.Row="2" Text="VPN:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="2" Grid.Column="1" x:Name="VpnText" Text="—" Margin="0,2" TextWrapping="Wrap"/>
-                <TextBlock Grid.Row="3" Text="YouTube:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="3" Grid.Column="1" x:Name="YouTubeText" Text="—" Margin="0,2"/>
-                <TextBlock Grid.Row="4" Text="Discord:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="4" Grid.Column="1" x:Name="DiscordText" Text="—" Margin="0,2"/>
-                <TextBlock Grid.Row="5" Text="Telegram:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="5" Grid.Column="1" x:Name="TelegramText" Text="—" Margin="0,2"/>
-                <TextBlock Grid.Row="6" Text="Нейросети:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="6" Grid.Column="1" x:Name="AiText" Text="—" Margin="0,2"/>
-                <TextBlock Grid.Row="7" Text="Интернет:" Margin="0,2,12,2"/>
-                <TextBlock Grid.Row="7" Grid.Column="1" x:Name="InternetText" Text="—" Margin="0,2"/>
+                </Button>
             </Grid>
 
-            <Button x:Name="TelegramButton" Content="Подключить Telegram к прокси" Padding="16,6" HorizontalAlignment="Left"
-                    IsEnabled="False" Click="Telegram_Click"/>
-            <TextBlock Text="Нужно один раз: Telegram Desktop спросит «Подключить прокси?» — нажми «Подключить»."
-                       TextWrapping="Wrap" FontSize="13" Foreground="Gray" Margin="0,4,0,12"/>
-
-            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="Firebrick" Margin="0,0,0,8" Visibility="Collapsed"/>
-            <DockPanel Margin="0,0,0,4">
-                <Button DockPanel.Dock="Right" Content="Скопировать журнал" Padding="12,2" FontSize="13" Click="CopyLog_Click"/>
-                <TextBlock Text="Журнал:" VerticalAlignment="Bottom"/>
-            </DockPanel>
+            <TextBlock x:Name="Headline" Text="Выключено" FontSize="28" FontWeight="SemiBold"
+                       HorizontalAlignment="Center" Margin="0,10,0,0"/>
+            <TextBlock x:Name="Subline" Text="Нажми на кнопку, чтобы включить" FontSize="17"
+                       Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" TextAlignment="Center"
+                       TextWrapping="Wrap" Margin="30,6,30,0"/>
         </StackPanel>
 
-        <ListBox x:Name="LogList" FontFamily="Consolas" FontSize="13"/>
-    </DockPanel>
+        <!-- Сервисы -->
+        <Grid Grid.Row="2" Margin="20,22,20,0" VerticalAlignment="Top">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="12"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <local:ServiceCard x:Name="YouTubeCard" Grid.Row="0" Grid.Column="0" Title="YouTube" Glyph="▶" BadgeBrush="#FFE11D2A"/>
+            <local:ServiceCard x:Name="DiscordCard" Grid.Row="0" Grid.Column="2" Title="Discord" Glyph="🎧" BadgeBrush="#FF5865F2"/>
+            <local:ServiceCard x:Name="TelegramCard" Grid.Row="2" Grid.Column="0" Title="Telegram" Glyph="✈" BadgeBrush="#FF229ED9"/>
+            <local:ServiceCard x:Name="AiCard" Grid.Row="2" Grid.Column="2" Title="Нейросети" Subtitle="и другие сайты" Glyph="✦"
+                               BadgeBrush="#FF8B5CF6"/>
+        </Grid>
+
+        <!-- Низ: настройки и отчёт -->
+        <Grid Grid.Row="3" Margin="16,8,16,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition/>
+                <ColumnDefinition/>
+            </Grid.ColumnDefinitions>
+            <Button Style="{StaticResource QuietButton}" Click="Settings_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE713;" FontFamily="{StaticResource IconFont}" FontSize="18" VerticalAlignment="Center"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    <TextBlock Text="Настройки" Margin="10,0,0,0" FontSize="17"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                </StackPanel>
+            </Button>
+            <Button Grid.Column="1" Style="{StaticResource QuietButton}" Click="Report_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE715;" FontFamily="{StaticResource IconFont}" FontSize="18" VerticalAlignment="Center"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                    <TextBlock Text="Отчёт внуку" Margin="10,0,0,0" FontSize="17"
+                               Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!-- Всплывающая подсказка снизу («Отчёт скопирован» и т. п.) -->
+        <Border x:Name="Toast" Grid.Row="2" Grid.RowSpan="2" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                Margin="20,0,20,80" Padding="18,12" CornerRadius="14" Background="#F02A3550" Opacity="0"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="ToastText" FontSize="16" TextWrapping="Wrap" TextAlignment="Center"/>
+        </Border>
+    </Grid>
 </Window>

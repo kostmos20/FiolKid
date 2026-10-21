@@ -21,6 +21,12 @@ public sealed record HealthReport(IReadOnlyDictionary<Service, bool> Services, b
     /// <summary>Страна, из которой нейросети видят запрос (код Cloudflare, например NL). Null — не проверяли или не ответили.</summary>
     public string? AiCountry { get; init; }
 
+    /// <summary>
+    /// Какие программы (Telegram, AyuGram…) сейчас подключены к нашему прокси. Пусто — Telegram ещё не
+    /// подключили к прокси, и он не работает, даже если сам прокси исправен. Null — не проверяли.
+    /// </summary>
+    public IReadOnlyList<string>? TelegramClients { get; init; }
+
     /// <summary>Почему не прошла проверка сервиса — для журнала и отчёта.</summary>
     public IReadOnlyDictionary<Service, string> Problems { get; init; } = new Dictionary<Service, string>();
 
@@ -78,6 +84,9 @@ public sealed class HealthChecker : IHealthProbe
     public async Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
     {
         var report = await CheckOnceAsync(services, ct);
+        if (services.Contains(Service.Telegram))
+            report = report with { TelegramClients = FindTelegramClients() };
+
         var failed = services.Where(s => !report[s]).ToList();
         if (failed.Count == 0 || !report.InternetOk)
             return report;
@@ -188,6 +197,18 @@ public sealed class HealthChecker : IHealthProbe
         HttpRequestException { InnerException: IOException } => "соединение оборвалось (похоже на блокировку)",
         _ => e.GetType().Name,
     };
+
+    private static IReadOnlyList<string>? FindTelegramClients()
+    {
+        try
+        {
+            return Zapret.TelegramClients.ConnectedTo(TelegramProxy.Port);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
 
     internal static string? ParseTraceCountry(string trace) => trace
         .Split('\n')

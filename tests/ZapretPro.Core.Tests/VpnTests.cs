@@ -100,6 +100,7 @@ public sealed class VpnTests : IDisposable
         Domains = new Dictionary<RouteSet, IReadOnlyList<string>>
         {
             [RouteSet.Ai] = ["chatgpt.com", "claude.ai", "dead.example"],
+            [RouteSet.Blocked] = [],
             [RouteSet.Telegram] = ["telegram.org"],
             [RouteSet.YouTube] = [],
             [RouteSet.Discord] = ["discord.com"],
@@ -107,6 +108,7 @@ public sealed class VpnTests : IDisposable
         Networks = new Dictionary<RouteSet, IReadOnlyList<IPNetwork>>
         {
             [RouteSet.Ai] = [IPNetwork.Parse("160.79.104.0/23")],
+            [RouteSet.Blocked] = [],
             [RouteSet.Telegram] = [IPNetwork.Parse("149.154.160.0/20")],
             [RouteSet.YouTube] = [IPNetwork.Parse("142.250.0.0/15"), IPNetwork.Parse("203.0.113.0/24")],
             [RouteSet.Discord] = [],
@@ -218,6 +220,97 @@ public sealed class VpnTests : IDisposable
         Assert.True(lists.Networks[RouteSet.YouTube].Count > 20);
         Assert.Contains("discord.com", lists.Domains[RouteSet.Discord]);
         Assert.All(lists.Domains.Values.SelectMany(d => d), d => Assert.DoesNotContain(" ", d));
+    }
+
+    [Fact]
+    public void Bundled_blocked_list_excludes_what_zapret_and_proxy_already_handle()
+    {
+        var zapretLists = Path.Combine(_dir, "zapret");
+        Directory.CreateDirectory(zapretLists);
+        File.WriteAllText(Path.Combine(zapretLists, "list-google.txt"), "youtube.com\ngooglevideo.com\nytimg.com\nggpht.com\nyoutu.be\n");
+        File.WriteAllText(Path.Combine(zapretLists, "list-general.txt"), "^dns.google\ndiscord.com\n");
+
+        var lists = RouteLists.Load(Path.Combine(AppContext.BaseDirectory, "data", "vpn"), null,
+            [Path.Combine(zapretLists, "list-google.txt"), Path.Combine(zapretLists, "list-general.txt")]);
+        var blocked = lists.Domains[RouteSet.Blocked];
+
+        Assert.Contains("instagram.com", blocked);
+        Assert.Contains("www.instagram.com", blocked);
+        Assert.Contains("facebook.com", blocked);
+        Assert.True(blocked.Count > 1000);
+        Assert.DoesNotContain("youtube.com", blocked);
+        Assert.DoesNotContain("googlevideo.com", blocked);
+        Assert.DoesNotContain(blocked, d => d.EndsWith(".youtube.com") || d.EndsWith(".googlevideo.com"));
+        Assert.DoesNotContain(blocked, d => d.StartsWith('.'));
+        Assert.True(lists.Networks[RouteSet.Blocked].Count > 10);
+    }
+
+    [Fact]
+    public void Blocked_list_prefers_downloaded_copy_and_drops_telegram_domains()
+    {
+        var builtIn = Path.Combine(_dir, "builtin");
+        var updated = Path.Combine(_dir, "updated");
+        Directory.CreateDirectory(builtIn);
+        Directory.CreateDirectory(updated);
+        File.WriteAllText(Path.Combine(builtIn, "ai-domains.txt"), "chatgpt.com");
+        File.WriteAllText(Path.Combine(builtIn, "telegram-domains.txt"), "telegram.org\nt.me");
+        File.WriteAllText(Path.Combine(builtIn, "blocked-domains.txt"), "old.example");
+        File.WriteAllText(Path.Combine(updated, "blocked-domains.txt"), "# шапка\nnew.example\nweb.telegram.org\nt.me\n.ua\nwww.site.example");
+
+        var blocked = RouteLists.Load(builtIn, updated).Domains[RouteSet.Blocked];
+
+        Assert.Equal(["new.example", "www.new.example", "www.site.example"], blocked);
+    }
+
+    [Fact]
+    public async Task ListUpdater_downloads_once_a_day_and_rejects_garbage()
+    {
+        var time = new FakeTime();
+        var calls = 0;
+        var answer = string.Join('\n', Enumerable.Range(0, 600).Select(i => $"site{i}.example"));
+        var updater = new ListUpdater(_dir, (url, _) =>
+        {
+            calls++;
+            return Task.FromResult(url.EndsWith("inside-raw.lst") ? answer : "157.240.0.0/16\n31.13.24.0/21\n" +
+                string.Join('\n', Enumerable.Range(1, 10).Select(i => $"10.{i}.0.0/16")));
+        }, time);
+
+        Assert.True(await updater.RefreshIfStaleAsync(default));
+        Assert.Equal(3, calls);
+        Assert.Contains("site599.example", File.ReadAllText(Path.Combine(_dir, "blocked-domains.txt")));
+
+        // Через час — не качаем снова
+        time.Now += TimeSpan.FromHours(1);
+        Assert.False(await updater.RefreshIfStaleAsync(default));
+        Assert.Equal(3, calls);
+
+        // Через сутки пришёл обрезок — старый список остаётся
+        time.Now += TimeSpan.FromDays(1);
+        answer = "only.example";
+        await updater.RefreshIfStaleAsync(default);
+        Assert.Contains("site599.example", File.ReadAllText(Path.Combine(_dir, "blocked-domains.txt")));
+    }
+
+    [Fact]
+    public async Task ListUpdater_keeps_old_list_when_offline()
+    {
+        var updater = new ListUpdater(_dir, (_, _) => Task.FromException<string>(new HttpRequestException("нет сети")));
+
+        Assert.False(await updater.RefreshIfStaleAsync(default));
+        Assert.False(File.Exists(Path.Combine(_dir, "blocked-domains.txt")));
+    }
+
+    [Fact]
+    public async Task Router_drops_subnets_inside_wider_ones()
+    {
+        var lists = Lists();
+        var nets = (Dictionary<RouteSet, IReadOnlyList<IPNetwork>>)lists.Networks;
+        nets[RouteSet.Telegram] = [IPNetwork.Parse("149.154.167.0/24"), IPNetwork.Parse("149.154.160.0/20"), IPNetwork.Parse("149.154.167.99/32")];
+        var router = new Router(lists, new FakeDns().Resolve);
+
+        var plan = await router.ComputeAsync(new HashSet<RouteSet> { RouteSet.Telegram }, "203.0.113.10", default);
+
+        Assert.Equal(["149.154.160.0/20"], plan.AllowedIps);
     }
 
     [Fact]

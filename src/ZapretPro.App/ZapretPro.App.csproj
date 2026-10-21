@@ -4,13 +4,15 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- Только ради значка в трее (NotifyIcon) -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>OdnaKnopka</AssemblyName>
+    <AssemblyName>FiolKid</AssemblyName>
     <RootNamespace>ZapretPro.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.0</Version>
-    <Product>Одна кнопка</Product>
+    <Version>0.4.0</Version>
+    <Product>FiolKid</Product>
   </PropertyGroup>
 
   <!-- Публикация: один self-contained exe, бабушке не нужно ставить .NET -->
@@ -23,6 +25,12 @@
     <DebugType>embedded</DebugType>
     <SatelliteResourceLanguages>ru</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <!-- Иначе имена WinForms (Application, MessageBox, Brushes…) путаются с WPF -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ZapretPro.Core\ZapretPro.Core.csproj" />

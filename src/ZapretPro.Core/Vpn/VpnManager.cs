@@ -24,13 +24,13 @@ public interface IVpnTunnel
 
 /// <summary>
 /// Туннель AmneziaWG через официальный amneziawg.exe (amnezia-vpn/amneziawg-windows-client):
-/// /installtunnelservice ставит службу AmneziaWGTunnel$OdnaKnopka, своего окна и иконки у неё нет.
+/// /installtunnelservice ставит службу AmneziaWGTunnel$FiolKid, своего окна и иконки у неё нет.
 /// Конфиг с приватным ключом лежит в папке, доступной только SYSTEM и администраторам,
 /// и удаляется при остановке.
 /// </summary>
 public sealed class VpnManager : IVpnTunnel
 {
-    public const string TunnelName = "OdnaKnopka";
+    public const string TunnelName = "FiolKid";
     private const string ServiceName = "AmneziaWGTunnel$" + TunnelName;
 
     // Без трафика клиент шлёт keepalive раз в 25 с, рукопожатие обновляется раз в 2 минуты
@@ -41,7 +41,7 @@ public sealed class VpnManager : IVpnTunnel
     private readonly string _confDir;
 
     public VpnManager() : this(Path.Combine(AppPaths.InstallDir, "amneziawg"),
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "OdnaKnopka", "vpn"))
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "FiolKid", "vpn"))
     {
     }
 

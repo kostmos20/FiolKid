@@ -139,6 +139,30 @@ public sealed class ZapretFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task Telegram_clients_are_found_by_their_connection_to_the_proxy_port()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        try
+        {
+            Assert.Empty(TelegramClients.ConnectedTo(port, includeSelf: true));
+
+            using var client = new System.Net.Sockets.TcpClient();
+            await client.ConnectAsync(System.Net.IPAddress.Loopback, port);
+            using var accepted = await listener.AcceptTcpClientAsync();
+
+            var name = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+            Assert.Equal([name], TelegramClients.ConnectedTo(port, includeSelf: true));
+            Assert.Empty(TelegramClients.ConnectedTo(port)); // себя не считаем
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
     public void Settings_survive_reload_and_corruption()
     {
         var path = Path.Combine(_dir, "settings.json");

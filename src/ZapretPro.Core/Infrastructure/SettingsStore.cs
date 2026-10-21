@@ -12,6 +12,9 @@ public sealed class AppSettings
     /// запоминает ссылку с ним, и смена секрета отключила бы Telegram.
     /// </summary>
     public string? TelegramSecret { get; set; }
+
+    /// <summary>Была ли программа включена, когда её закрыли: при следующем запуске включится сама.</summary>
+    public bool Enabled { get; set; }
 }
 
 /// <summary>Настройки в JSON-файле. Битый или отсутствующий файл — просто настройки по умолчанию.</summary>

@@ -86,7 +86,7 @@ public sealed class VpnController : IVpn
 
     public async Task<VpnStatus> ApplyAsync(IReadOnlySet<RouteSet> fallback, CancellationToken ct)
     {
-        var sets = new HashSet<RouteSet>(fallback) { RouteSet.Ai };
+        var sets = new HashSet<RouteSet>(fallback) { RouteSet.Ai, RouteSet.Blocked };
 
         if (!LoadKey())
         {
@@ -153,6 +153,13 @@ public sealed class VpnController : IVpn
                 return health;
             await Task.Delay(TimeSpan.FromSeconds(1), _time, ct);
         }
+    }
+
+    /// <summary>Списки сайтов обновились — при следующем <see cref="ApplyAsync"/> перечитать их и пересчитать маршруты.</summary>
+    public void ReloadLists()
+    {
+        _router = null;
+        _plan = null;
     }
 
     public async Task StopAsync(CancellationToken ct)

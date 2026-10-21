@@ -1,4 +1,4 @@
-﻿# Собирает готовую к запуску программу в папку dist и архив ОднаКнопка.zip для отправки.
+﻿# Собирает готовую к запуску программу в папку dist и архив FiolKid.zip для отправки.
 # Запуск: правой кнопкой по build.ps1 -> «Выполнить с помощью PowerShell»
 # или из терминала: powershell -ExecutionPolicy Bypass -File build.ps1
 
@@ -17,8 +17,8 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
 
 $apps = @(
-    @{ Project = 'src\ZapretPro.App';     Exe = 'OdnaKnopka.exe';         Name = 'ОднаКнопка.exe' },
-    @{ Project = 'src\ZapretPro.KeyTool'; Exe = 'OdnaKnopka.KeyTool.exe'; Name = 'ПроверитьКлюч.exe' }
+    @{ Project = 'src\ZapretPro.App';     Exe = 'FiolKid.exe';            Name = 'FiolKid.exe' },
+    @{ Project = 'src\ZapretPro.KeyTool'; Exe = 'FiolKid.KeyTool.exe';    Name = 'ПроверитьКлюч.exe' }
 )
 
 foreach ($app in $apps) {
@@ -48,15 +48,22 @@ New-Item -ItemType Directory -Force $awg | Out-Null
 Copy-Item (Join-Path $third 'amneziawg\*') $awg -Exclude '.sha256', '.source'
 Copy-Item -Recurse (Join-Path $root 'data\vpn') $stage
 
+# Версии компонентов — их показывает раздел «Обновления» в настройках
+$versions = @(
+    "Прокси Telegram = $((Get-Content (Join-Path $third 'tg-ws-proxy\.source') -Raw).Trim())",
+    "VPN (AmneziaWG) = $((Get-Content (Join-Path $third 'amneziawg\.source') -Raw).Trim())"
+)
+[IO.File]::WriteAllLines((Join-Path $stage 'versions.txt'), [string[]]$versions, (New-Object Text.UTF8Encoding $false))
+
 # Архив для отправки тестировщику: всё, кроме ПроверитьКлюч.exe, плюс инструкция
 $package = Join-Path $work 'package'
-$packageApp = Join-Path $package 'ОднаКнопка'
+$packageApp = Join-Path $package 'FiolKid'
 if (Test-Path $package) { Remove-Item -Recurse -Force $package }
 New-Item -ItemType Directory -Force $package | Out-Null
 Copy-Item -Recurse $stage $packageApp
 Remove-Item (Join-Path $packageApp 'ПроверитьКлюч.exe')
 Copy-Item (Join-Path $root 'docs\КАК-ЗАПУСТИТЬ.txt') $packageApp
-$zip = Join-Path $root 'ОднаКнопка.zip'
+$zip = Join-Path $root 'FiolKid.zip'
 if (Test-Path $zip) { Remove-Item $zip }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 # UTF-8 в именах файлов, иначе русские названия в архиве превратятся в кракозябры
@@ -65,7 +72,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # Переносим в dist только изменившееся; данные tg-ws-proxy, созданные при запуске, не трогаем
 robocopy $stage $dist /MIR /XD TgWsProxy_data /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) {
-    Write-Warning 'Часть файлов в dist занята — закрой ОднаКнопка.exe и запусти сборку ещё раз. Архив при этом собран полностью.'
+    Write-Warning 'Часть файлов в dist занята — закрой FiolKid.exe и запусти сборку ещё раз. Архив при этом собран полностью.'
 }
 
 # Компилятор остаётся висеть в памяти после сборки — выключаем

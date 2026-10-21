@@ -3,10 +3,14 @@ using System.Net.Sockets;
 
 namespace ZapretPro.Core.Vpn;
 
-/// <summary>Что пускать в VPN. Нейросети — всегда, остальное — только в запасном режиме.</summary>
+/// <summary>
+/// Что пускать в VPN. Нейросети и заблокированные сайты — всегда, остальное — только в запасном режиме
+/// (основной путь для YouTube и Discord — zapret, для Telegram — локальный прокси).
+/// </summary>
 public enum RouteSet
 {
     Ai,
+    Blocked,
     Telegram,
     YouTube,
     Discord,
@@ -15,14 +19,24 @@ public enum RouteSet
 /// <summary>Списки доменов и подсетей из папки vpn (рядом с exe). Редактируются без пересборки.</summary>
 public sealed class RouteLists
 {
+    /// <summary>Списки, которые программа сама обновляет из интернета (см. <see cref="ListUpdater"/>).</summary>
+    public static readonly string[] UpdatableFiles = ["blocked-domains.txt", "blocked-cidr.txt"];
+
     public required IReadOnlyDictionary<RouteSet, IReadOnlyList<string>> Domains { get; init; }
     public required IReadOnlyDictionary<RouteSet, IReadOnlyList<IPNetwork>> Networks { get; init; }
 
-    public static RouteLists Load(string dir)
+    /// <param name="dir">Встроенные списки (папка vpn рядом с exe).</param>
+    /// <param name="updatedDir">Скачанные свежие версии; если файл там есть, берётся он.</param>
+    /// <param name="excludeFiles">
+    /// Списки доменов, которые идут мимо VPN своим путём (хостлисты zapret). Из заблокированных сайтов они
+    /// исключаются, чтобы видео YouTube не шло через сервер знакомого.
+    /// </param>
+    public static RouteLists Load(string dir, string? updatedDir = null, IEnumerable<string>? excludeFiles = null)
     {
         var files = new Dictionary<RouteSet, string[]>
         {
             [RouteSet.Ai] = ["ai-domains.txt"],
+            [RouteSet.Blocked] = ["blocked-domains.txt", "blocked-cidr.txt"],
             [RouteSet.Telegram] = ["telegram-domains.txt", "telegram-cidr.txt"],
             [RouteSet.YouTube] = ["google-cidr.txt"],
             [RouteSet.Discord] = ["discord-domains.txt"],
@@ -32,32 +46,69 @@ public sealed class RouteLists
         var networks = new Dictionary<RouteSet, IReadOnlyList<IPNetwork>>();
         foreach (var (set, names) in files)
         {
-            var lines = names
-                .Select(n => Path.Combine(dir, n))
-                .Where(File.Exists)
-                .SelectMany(File.ReadLines)
-                .Select(l => l.Split('#')[0].Trim())
-                .Where(l => l.Length > 0)
-                .ToList();
-
-            // В файлах можно писать и домены, и подсети вида 1.2.3.0/24 (или одиночные IP)
-            var nets = new List<IPNetwork>();
-            var hosts = new List<string>();
-            foreach (var line in lines)
-            {
-                if (TryParseNetwork(line, out var net))
-                    nets.Add(net);
-                else
-                    hosts.Add(line.ToLowerInvariant());
-            }
-            domains[set] = hosts.Distinct().ToList();
+            var (hosts, nets) = Parse(names.Select(n => Pick(dir, updatedDir, n)).SelectMany(ReadLines));
+            domains[set] = hosts;
             networks[set] = nets;
         }
 
         if (domains[RouteSet.Ai].Count == 0 && networks[RouteSet.Ai].Count == 0)
             throw new InvalidDataException($"Список нейросетей пуст или не найден: {Path.Combine(dir, "ai-domains.txt")}");
 
+        // Домены с собственным путём: всё из хостлистов zapret (в их синтаксисе ^ — «точно этот домен») и Telegram
+        var own = (excludeFiles ?? [])
+            .SelectMany(ReadLines)
+            .Concat(domains[RouteSet.Telegram])
+            .Select(d => d.TrimStart('^').ToLowerInvariant())
+            .ToHashSet();
+
+        domains[RouteSet.Blocked] = domains[RouteSet.Blocked]
+            // Строки вида «.ua» — целые доменные зоны, по IP их не выразить
+            .Where(d => !d.StartsWith('.') && d.Contains('.') && !IsUnder(d, own))
+            // Сайты часто живут на www.: без него открылась бы только переадресация
+            .SelectMany(d => d.StartsWith("www.") ? [d] : new[] { d, "www." + d })
+            .Distinct()
+            .ToList();
+
         return new RouteLists { Domains = domains, Networks = networks };
+    }
+
+    private static string Pick(string dir, string? updatedDir, string name)
+    {
+        var updated = updatedDir is null ? null : Path.Combine(updatedDir, name);
+        return updated is not null && File.Exists(updated) ? updated : Path.Combine(dir, name);
+    }
+
+    private static IEnumerable<string> ReadLines(string path) => File.Exists(path)
+        ? File.ReadLines(path).Select(l => l.Split('#')[0].Trim()).Where(l => l.Length > 0)
+        : [];
+
+    /// <summary>В файлах можно писать и домены, и подсети вида 1.2.3.0/24 (или одиночные IP).</summary>
+    private static (IReadOnlyList<string> Hosts, IReadOnlyList<IPNetwork> Networks) Parse(IEnumerable<string> lines)
+    {
+        var nets = new List<IPNetwork>();
+        var hosts = new List<string>();
+        foreach (var line in lines)
+        {
+            if (TryParseNetwork(line, out var net))
+                nets.Add(net);
+            else
+                hosts.Add(line.ToLowerInvariant());
+        }
+        return (hosts.Distinct().ToList(), nets.Distinct().ToList());
+    }
+
+    /// <summary>Домен совпадает с одним из списка или является его поддоменом.</summary>
+    private static bool IsUnder(string domain, HashSet<string> parents)
+    {
+        for (var d = domain; ; )
+        {
+            if (parents.Contains(d))
+                return true;
+            var dot = d.IndexOf('.');
+            if (dot < 0)
+                return false;
+            d = d[(dot + 1)..];
+        }
     }
 
     internal static bool TryParseNetwork(string text, out IPNetwork network)
@@ -84,6 +135,14 @@ public sealed record RoutePlan(IReadOnlyList<string> AllowedIps, IReadOnlyList<s
 public sealed class Router
 {
     private static readonly TimeSpan Remember = TimeSpan.FromDays(7);
+
+    // Адреса нейросетей узнаём часто (у них короткие DNS-записи), тысячу заблокированных сайтов — раз в час
+    private static readonly TimeSpan FastRefresh = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan SlowRefresh = TimeSpan.FromHours(1);
+
+    // Чтобы тысяча DNS-запросов не ушла разом
+    private readonly SemaphoreSlim _dnsSlots = new(32);
+    private readonly Dictionary<RouteSet, DateTimeOffset> _resolvedAt = new();
 
     // Локальные, служебные и CGNAT-адреса в туннель не пускаем никогда
     private static readonly IPNetwork[] NeverRoute =
@@ -122,12 +181,20 @@ public sealed class Router
         var wanted = new HashSet<IPAddress>();
         foreach (var set in sets)
         {
-            var resolved = await Task.WhenAll(_lists.Domains[set].Select(d => ResolveAsync(d, ct)));
             var seen = _seen[set];
+            var refresh = set == RouteSet.Ai ? FastRefresh : SlowRefresh;
+            if (!_resolvedAt.TryGetValue(set, out var last) || now - last >= refresh)
+            {
+                var resolved = await Task.WhenAll(_lists.Domains[set].Select(d => ResolveAsync(d, ct)));
+                _resolvedAt[set] = now;
+                lock (seen)
+                {
+                    foreach (var ip in resolved.SelectMany(a => a))
+                        seen[ip] = now;
+                }
+            }
             lock (seen)
             {
-                foreach (var ip in resolved.SelectMany(a => a))
-                    seen[ip] = now;
                 foreach (var stale in seen.Where(kv => now - kv.Value > Remember).Select(kv => kv.Key).ToList())
                     seen.Remove(stale);
                 wanted.UnionWith(seen.Keys);
@@ -135,8 +202,11 @@ public sealed class Router
         }
 
         var routes = new List<IPNetwork>();
-        foreach (var net in networks)
+        // Сначала широкие подсети: узкие внутри них уже не нужны
+        foreach (var net in networks.OrderBy(n => n.PrefixLength))
         {
+            if (routes.Any(r => r.Contains(net.BaseAddress) && r.PrefixLength <= net.PrefixLength))
+                continue;
             if (NeverRoute.Any(n => Overlaps(n, net)))
             {
                 warnings.Add($"Подсеть {net} пропущена: это локальные адреса");
@@ -171,6 +241,7 @@ public sealed class Router
 
     private async Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct)
     {
+        await _dnsSlots.WaitAsync(ct);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -181,6 +252,10 @@ public sealed class Router
         catch (Exception e) when (e is SocketException or OperationCanceledException && !ct.IsCancellationRequested)
         {
             return [];
+        }
+        finally
+        {
+            _dnsSlots.Release();
         }
     }
 

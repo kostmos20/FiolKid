@@ -1,303 +1,220 @@
 ﻿using System.ComponentModel;
-using System.Text;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using ZapretPro.Core.Health;
-using ZapretPro.Core.Infrastructure;
 using ZapretPro.Core.Key;
-using ZapretPro.Core.Vpn;
-using ZapretPro.Core.Zapret;
 
 namespace ZapretPro.App;
 
-/// <summary>Временное окно проверки этапов 2–3: zapret, прокси Telegram, VPN, перебор стратегий, журнал.</summary>
+/// <summary>Главный экран: большая кнопка, общее состояние и четыре карточки сервисов. Без технических слов.</summary>
 public partial class MainWindow : Window
 {
-    private const int MaxLogLines = 300;
+    private readonly AppEngine _engine;
+    private readonly Storyboard _pulse;
+    private bool _busy;
 
-    private readonly ZapretManager _zapret = new();
-    private readonly TelegramProxy _telegram;
-    private readonly KeyStore _keys = new();
-    private readonly VpnController _vpn;
-    private readonly Watchdog _watchdog;
-    private CancellationTokenSource? _cts;
-    private Task? _run;
-
-    public MainWindow()
+    public MainWindow(AppEngine engine)
     {
         InitializeComponent();
+        _engine = engine;
+        _pulse = BuildPulse();
 
-        var settings = new SettingsStore();
-        var secret = settings.Load().TelegramSecret;
-        if (secret is null)
+        _engine.StatusChanged += () => Dispatcher.BeginInvoke(Refresh);
+        TelegramCard.ActionClick += (_, _) => ConnectTelegram();
+        AiCard.ActionClick += (_, _) => PasteKey();
+        Loaded += (_, _) => Refresh();
+    }
+
+    /// <summary>Перерисовать всё по текущему состоянию.</summary>
+    public void Refresh()
+    {
+        var on = _engine.IsOn;
+        var looks = Enum.GetValues<Service>().ToDictionary(s => s, _engine.Look);
+
+        YouTubeCard.Show(looks[Service.YouTube]);
+        DiscordCard.Show(looks[Service.Discord]);
+        TelegramCard.Show(looks[Service.Telegram], looks[Service.Telegram] == ServiceLook.NeedsConnect ? "Подключить" : null);
+        AiCard.Show(looks[Service.Ai], looks[Service.Ai] == ServiceLook.NeedsKey ? "Вставить ключ" : null);
+
+        var state = _engine.Status.State;
+        var searching = on && state == ZapretState.Searching;
+        var problems = looks.Values.Count(l => l is ServiceLook.NotWorking or ServiceLook.NeedsConnect);
+        var checking = looks.Values.Any(l => l == ServiceLook.Checking);
+
+        (Headline.Text, Subline.Text) = (on, state) switch
         {
-            secret = TelegramProxy.NewSecret();
-            settings.Update(s => s.TelegramSecret = secret);
-        }
-        _telegram = new TelegramProxy(secret);
+            (false, _) => ("Выключено", "Нажми на кнопку, чтобы включить"),
+            (true, ZapretState.Searching) => ("Подбираю лучший способ…", "Это может занять пару минут"),
+            (true, ZapretState.NoInternet) => ("Нет интернета", "Проверь, подключён ли компьютер к интернету"),
+            _ when checking => ("Проверяю…", "Сейчас всё проверю"),
+            _ when problems == 0 => ("Всё работает", "Можно пользоваться"),
+            _ when looks[Service.Telegram] == ServiceLook.NeedsConnect && problems == 1
+                => ("Почти всё работает", "Осталось подключить Telegram — нажми «Подключить»"),
+            _ => ("Почти всё работает", "Если не наладится само — нажми «Отчёт внуку»"),
+        };
 
-        var listsDir = System.IO.Path.Combine(AppPaths.InstallDir, "vpn");
-        _vpn = new VpnController(_keys, () => new Router(RouteLists.Load(listsDir)), new VpnManager());
-        _vpn.Log += m => Dispatcher.BeginInvoke(() => AddLog(m));
+        var color = !on ? (Color)FindResource("BgBottomColor")
+            : searching || checking ? ((SolidColorBrush)FindResource("AmberBrush")).Color
+            : problems == 0 ? ((SolidColorBrush)FindResource("GreenBrush")).Color
+            : ((SolidColorBrush)FindResource("AmberBrush")).Color;
+        PaintPower(on, color);
+        TitleDot.Fill = !on ? (Brush)FindResource("GrayBrush") : new SolidColorBrush(color);
 
-        _watchdog = new Watchdog(_zapret, _telegram, _vpn, new HealthChecker(secret), settings);
-        _watchdog.StatusChanged += s => Dispatcher.BeginInvoke(() => Show(s));
-        _watchdog.Log += m => Dispatcher.BeginInvoke(() => AddLog(m));
-
-        ShowKey();
+        if (searching)
+            _pulse.Begin(this, true);
+        else
+            _pulse.Stop(this);
     }
 
-    private void Start_Click(object sender, RoutedEventArgs e)
+    private async void Power_Click(object sender, RoutedEventArgs e)
     {
-        StartButton.IsEnabled = false;
-        StopButton.IsEnabled = CheckButton.IsEnabled = TelegramButton.IsEnabled = true;
-        AddLog("Запуск");
-
-        _cts = new CancellationTokenSource();
-        var ct = _cts.Token;
-        _run = Task.Run(async () =>
-        {
-            try
-            {
-                await _watchdog.RunAsync(ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-            }
-            catch (Exception ex)
-            {
-                await Dispatcher.BeginInvoke(() => AddLog($"ОШИБКА: {ex}"));
-            }
-        }, ct);
-    }
-
-    private async void Stop_Click(object sender, RoutedEventArgs e)
-    {
-        StopButton.IsEnabled = CheckButton.IsEnabled = TelegramButton.IsEnabled = false;
-        await StopAsync();
-        StartButton.IsEnabled = true;
-        AddLog("Остановлено");
-    }
-
-    private async void Check_Click(object sender, RoutedEventArgs e) => await CheckNowAsync();
-
-    private async Task CheckNowAsync()
-    {
-        CheckButton.IsEnabled = false;
+        if (_busy)
+            return;
+        _busy = true;
+        PowerButton.IsEnabled = false;
         try
         {
-            if (_cts is { IsCancellationRequested: false } cts)
-                await Task.Run(() => _watchdog.CheckAsync(cts.Token));
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            AddLog($"ОШИБКА: {ex.Message}");
+            if (_engine.IsOn)
+            {
+                Headline.Text = "Выключаю…";
+                Subline.Text = "";
+                await _engine.TurnOffAsync();
+            }
+            else
+                _engine.TurnOn();
         }
         finally
         {
-            CheckButton.IsEnabled = StopButton.IsEnabled;
+            _busy = false;
+            PowerButton.IsEnabled = true;
+            Refresh();
         }
     }
 
-    private async void PasteKey_Click(object sender, RoutedEventArgs e)
+    private void ConnectTelegram()
+    {
+        try
+        {
+            _engine.Telegram.OpenInTelegram();
+            ShowToast("Telegram спросит «Подключить прокси?» — нажми «Подключить»");
+            // Через пару секунд Telegram подключится — проверим, чтобы карточка позеленела
+            _ = Task.Delay(TimeSpan.FromSeconds(8)).ContinueWith(_ => _engine.CheckNowAsync());
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Не удалось открыть Telegram: {ex.Message}");
+        }
+    }
+
+    private void PasteKey()
     {
         var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            ShowToast("Сначала скопируй ключ, который прислал знакомый (он начинается с vpn://)");
+            return;
+        }
         try
         {
-            // Сначала полная проверка (в том числе что это AmneziaWG), и только потом замена прежнего ключа
-            AwgConfig.FromKey(KeyParser.Parse(text));
-            var parsed = _keys.Save(text);
-            AddLog($"Ключ сохранён: {VpnProtocolInfo.DisplayName(parsed.Protocol)}");
-            // Ключ с буфера обмена убираем, чтобы не остался там случайно
+            _engine.SaveKey(text);
             Clipboard.Clear();
+            ShowToast("Ключ вставлен");
+            Refresh();
         }
         catch (KeyParseException ex)
         {
-            AddLog($"Ключ не принят: {ex.Message}");
-            MessageBox.Show(this, ex.Message, "Ключ не подходит", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowToast(ex.Message);
         }
-        ShowKey();
-        if (_run is not null)
-            await CheckNowAsync();
     }
 
-    private async void DeleteKey_Click(object sender, RoutedEventArgs e)
-    {
-        if (MessageBox.Show(this, "Удалить ключ VPN? Нейросети перестанут работать, пока не вставишь новый.",
-                "Удалить ключ", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-            return;
-        _keys.Delete();
-        AddLog("Ключ удалён");
-        ShowKey();
-        if (_run is not null)
-            await CheckNowAsync();
-    }
+    private void Settings_Click(object sender, RoutedEventArgs e) =>
+        new SettingsWindow(_engine) { Owner = this }.ShowDialog();
 
-    private void Telegram_Click(object sender, RoutedEventArgs e)
+    private void Report_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _telegram.OpenInTelegram();
-            AddLog($"Открыта ссылка для Telegram: tg://proxy?server={TelegramProxy.Host}&port={TelegramProxy.Port}&secret=…");
+            Clipboard.SetText(_engine.BuildReport());
+            ShowToast("Отчёт скопирован. Открой переписку с внуком и вставь его (Ctrl+V)");
         }
-        catch (Exception ex)
+        catch (System.Runtime.InteropServices.COMException)
         {
-            AddLog($"Не удалось открыть Telegram: {ex.Message}");
+            ShowToast("Не получилось скопировать — попробуй ещё раз");
         }
     }
 
-    /// <summary>Журнал и состояние текстом — чтобы прислать. Ключа и секретов в журнале нет.</summary>
-    private void CopyLog_Click(object sender, RoutedEventArgs e)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Одна кнопка {typeof(MainWindow).Assembly.GetName().Version}, {DateTime.Now:yyyy-MM-dd HH:mm}, {Environment.OSVersion}");
-        sb.AppendLine($"Состояние: {StateText.Text}; стратегия: {StrategyText.Text}; VPN: {VpnText.Text}");
-        sb.AppendLine($"YouTube: {YouTubeText.Text}; Discord: {DiscordText.Text}; Telegram: {TelegramText.Text}; нейросети: {AiText.Text}; интернет: {InternetText.Text}");
-        if (ErrorText.Visibility == Visibility.Visible)
-            sb.AppendLine($"Ошибка: {ErrorText.Text}");
-        sb.AppendLine("--- журнал ---");
-        foreach (var item in LogList.Items)
-            sb.AppendLine(item?.ToString());
-        if (_zapret.RecentOutput.Count > 0)
-        {
-            sb.AppendLine("--- вывод winws ---");
-            foreach (var line in _zapret.RecentOutput)
-                sb.AppendLine(line);
-        }
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
-        try
-        {
-            Clipboard.SetText(sb.ToString());
-            AddLog("Журнал скопирован — вставь его в сообщение (Ctrl+V)");
-        }
-        catch (System.Runtime.InteropServices.COMException ex)
-        {
-            AddLog($"Не удалось скопировать: {ex.Message}");
-        }
-    }
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-    protected override async void OnClosing(CancelEventArgs e)
+    /// <summary>Крестик не выключает программу, а прячет окно в трей.</summary>
+    protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
-        if (_run is null)
+        if (((App)Application.Current).IsExiting)
             return;
-
-        // Дожидаемся остановки, чтобы winws и VPN не остались работать без присмотра
         e.Cancel = true;
         Hide();
-        await StopAsync();
-        _run = null;
-        Close();
+        ((App)Application.Current).Tray.ShowHiddenHint();
     }
 
-    private async Task StopAsync()
+    public void ShowToast(string text)
     {
-        _cts?.Cancel();
-        if (_run is not null)
-            await _run;
-        _run = null;
-        try
-        {
-            await _watchdog.StopAsync(CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            AddLog($"Ошибка при остановке: {ex.Message}");
-        }
+        ToastText.Text = text;
+        var fade = new DoubleAnimationUsingKeyFrames();
+        fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200))));
+        fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(4.5))));
+        fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5))));
+        Toast.BeginAnimation(OpacityProperty, fade);
     }
 
-    private void ShowKey()
+    /// <summary>Цвет кнопки: серая — выключено, зелёная — всё хорошо, янтарная — подбираю или не всё работает.</summary>
+    private void PaintPower(bool on, Color color)
     {
-        var key = _keys.Load();
-        if (key is null)
-        {
-            KeyText.Text = _keys.HasKey ? "Сохранённый ключ не читается — вставь заново" : "Ключа нет — нейросети работать не будут";
-            DeleteKeyButton.IsEnabled = _keys.HasKey;
-            return;
-        }
+        PowerButton.ApplyTemplate();
+        var glow = (DropShadowEffect)((System.Windows.Shapes.Ellipse)PowerButton.Template.FindName("Glow", PowerButton)).Effect;
+        var top = (GradientStop)PowerButton.Template.FindName("FaceTop", PowerButton);
+        var bottom = (GradientStop)PowerButton.Template.FindName("FaceBottom", PowerButton);
 
-        DeleteKeyButton.IsEnabled = true;
-        try
-        {
-            var parsed = KeyParser.Parse(key);
-            KeyText.Text = parsed.Protocol == VpnProtocol.AmneziaWg
-                ? $"Ключ подходит: {VpnProtocolInfo.DisplayName(parsed.Protocol)}"
-                : $"Ключ не подходит: {parsed.UnsupportedReason ?? "нужен ключ AmneziaWG"}";
-        }
-        catch (KeyParseException ex)
-        {
-            KeyText.Text = $"Ключ не подходит: {ex.Message}";
-        }
+        var duration = TimeSpan.FromMilliseconds(400);
+        Animate(top, on ? Lighten(color, 0.15) : Color.FromRgb(0x33, 0x41, 0x55), duration);
+        Animate(bottom, on ? Darken(color, 0.35) : Color.FromRgb(0x1E, 0x29, 0x3B), duration);
+        glow.Color = color;
+        glow.BeginAnimation(DropShadowEffect.OpacityProperty, new DoubleAnimation(on ? 0.75 : 0, duration));
+
+        PowerLabel.Text = on ? "ВЫКЛЮЧИТЬ" : "ВКЛЮЧИТЬ";
+        PowerLabel.Opacity = on ? 0.85 : 1;
     }
 
-    private void Show(WatchdogStatus s)
+    private static void Animate(GradientStop stop, Color to, TimeSpan duration) =>
+        stop.BeginAnimation(GradientStop.ColorProperty, new ColorAnimation(to, duration));
+
+    private static Color Lighten(Color c, double k) =>
+        Color.FromRgb((byte)(c.R + (255 - c.R) * k), (byte)(c.G + (255 - c.G) * k), (byte)(c.B + (255 - c.B) * k));
+
+    private static Color Darken(Color c, double k) =>
+        Color.FromRgb((byte)(c.R * (1 - k)), (byte)(c.G * (1 - k)), (byte)(c.B * (1 - k)));
+
+    /// <summary>Кольцо вокруг кнопки расходится и гаснет — «идёт работа».</summary>
+    private Storyboard BuildPulse()
     {
-        StateText.Text = s.State switch
+        var board = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
+        var duration = new Duration(TimeSpan.FromSeconds(1.6));
+
+        foreach (var property in new[] { ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty })
         {
-            ZapretState.Stopped => "остановлено",
-            ZapretState.Searching => "подбираю лучший способ…",
-            ZapretState.Working => "всё работает",
-            ZapretState.Partial => "работает, часть — через запасной канал",
-            ZapretState.Failed => "обход не помог, YouTube и Discord — через запасной канал",
-            ZapretState.NoInternet => "нет интернета",
-            _ => s.State.ToString(),
-        };
-        StrategyText.Text = s.StrategyId is null ? "—" : $"{s.StrategyId} ({s.StrategyNumber} из {s.StrategyCount})";
-
-        VpnText.Text = s.Vpn.State switch
-        {
-            VpnState.NoKey => "нет ключа",
-            VpnState.BadKey => "ключ не подходит",
-            VpnState.Stopped => "выключен",
-            VpnState.Connecting => "подключаюсь…",
-            VpnState.Connected => $"подключён, маршрутов: {s.Vpn.RouteCount}"
-                                  + (s.Vpn.Fallback.Count > 0 ? $", запасной канал: {string.Join(", ", s.Vpn.Fallback)}" : ""),
-            VpnState.ServerNotResponding => "сервер не отвечает",
-            VpnState.Failed => "ошибка",
-            _ => s.Vpn.State.ToString(),
-        };
-
-        SetService(YouTubeText, s, Service.YouTube);
-        SetService(DiscordText, s, Service.Discord);
-        SetService(TelegramText, s, Service.Telegram, s.TelegramRunning ? null : "прокси не запущен");
-        SetService(AiText, s, Service.Ai,
-            s.LastReport?.AiCountry is { } country ? $"видят из страны {country}" : s.Vpn.State == VpnState.NoKey ? "нет ключа" : null);
-        InternetText.Text = s.LastReport is null ? "—" : s.LastReport.InternetOk ? "есть" : "нет";
-
-        var error = s.LastError ?? (s.Vpn.State is VpnState.NoKey ? null : s.Vpn.Error);
-        ErrorText.Text = error ?? "";
-        ErrorText.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    private static void SetService(TextBlock text, WatchdogStatus s, Service service, string? note = null)
-    {
-        var report = s.LastReport;
-        if (report is null || !report.Services.ContainsKey(service))
-        {
-            text.Text = note ?? "—";
-            text.Foreground = Brushes.Gray;
-            return;
+            var scale = new DoubleAnimation(0.84, 1.0, duration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+            Storyboard.SetTarget(scale, PulseRing);
+            Storyboard.SetTargetProperty(scale, new PropertyPath($"RenderTransform.{(property == ScaleTransform.ScaleXProperty ? "ScaleX" : "ScaleY")}"));
+            board.Children.Add(scale);
         }
 
-        var ok = report[service];
-        var notes = new List<string>();
-        if (s.ViaVpn.Contains(service))
-            notes.Add("через VPN");
-        if (note is not null)
-            notes.Add(note);
-        text.Text = (ok ? "● работает" : "● не работает") + (notes.Count > 0 ? $" ({string.Join(", ", notes)})" : "");
-        text.Foreground = ok ? Brushes.ForestGreen : Brushes.Firebrick;
-    }
-
-    private void AddLog(string message)
-    {
-        LogList.Items.Add($"{DateTime.Now:HH:mm:ss}  {message}");
-        while (LogList.Items.Count > MaxLogLines)
-            LogList.Items.RemoveAt(0);
-        LogList.ScrollIntoView(LogList.Items[^1]);
+        var fade = new DoubleAnimation(0.9, 0, duration);
+        Storyboard.SetTarget(fade, PulseRing);
+        Storyboard.SetTargetProperty(fade, new PropertyPath(OpacityProperty));
+        board.Children.Add(fade);
+        return board;
     }
 }
