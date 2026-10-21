@@ -124,7 +124,11 @@ public sealed class RouteLists
     }
 }
 
-public sealed record RoutePlan(IReadOnlyList<string> AllowedIps, IReadOnlyList<string> Warnings);
+public sealed record RoutePlan(IReadOnlyList<string> AllowedIps, IReadOnlyList<string> Warnings)
+{
+    /// <summary>Адреса VPN-сервера: их нельзя пускать в сам туннель.</summary>
+    public IReadOnlyList<IPAddress> Endpoints { get; init; } = [];
+}
 
 /// <summary>
 /// Раздельная маршрутизация для AmneziaWG: в туннель идут только адреса из списков.
@@ -145,7 +149,7 @@ public sealed class Router
     private readonly Dictionary<RouteSet, DateTimeOffset> _resolvedAt = new();
 
     // Локальные, служебные и CGNAT-адреса в туннель не пускаем никогда
-    private static readonly IPNetwork[] NeverRoute =
+    internal static readonly IPNetwork[] NeverRoute =
     [
         IPNetwork.Parse("0.0.0.0/8"), IPNetwork.Parse("10.0.0.0/8"), IPNetwork.Parse("100.64.0.0/10"),
         IPNetwork.Parse("127.0.0.0/8"), IPNetwork.Parse("169.254.0.0/16"), IPNetwork.Parse("172.16.0.0/12"),
@@ -161,11 +165,18 @@ public sealed class Router
     public Router(RouteLists lists, Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, TimeProvider? time = null)
     {
         _lists = lists;
-        _resolve = resolve ?? Dns.GetHostAddressesAsync;
+        _resolve = resolve ?? System.Net.Dns.GetHostAddressesAsync;
         _time = time ?? TimeProvider.System;
     }
 
-    public async Task<RoutePlan> ComputeAsync(IReadOnlySet<RouteSet> sets, string endpointHost, CancellationToken ct)
+    public RouteLists Lists => _lists;
+
+    /// <param name="resolveDomains">
+    /// False — домены не резолвить заранее: их адреса добавит наш DNS в момент, когда браузер их спросит
+    /// (<see cref="Dns.SmartDns"/>). True — запасной путь, если наш DNS не запустился.
+    /// </param>
+    public async Task<RoutePlan> ComputeAsync(IReadOnlySet<RouteSet> sets, string endpointHost, CancellationToken ct,
+        bool resolveDomains = true)
     {
         var warnings = new List<string>();
         var now = _time.GetUtcNow();
@@ -179,7 +190,7 @@ public sealed class Router
         var networks = sets.SelectMany(s => _lists.Networks[s]).Distinct().ToList();
 
         var wanted = new HashSet<IPAddress>();
-        foreach (var set in sets)
+        foreach (var set in resolveDomains ? sets : new HashSet<RouteSet>())
         {
             var seen = _seen[set];
             var refresh = set == RouteSet.Ai ? FastRefresh : SlowRefresh;
@@ -236,7 +247,7 @@ public sealed class Router
             .ThenBy(n => n.PrefixLength)
             .Select(n => n.ToString())
             .ToList();
-        return new RoutePlan(allowed, warnings);
+        return new RoutePlan(allowed, warnings) { Endpoints = endpoints };
     }
 
     private async Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct)

@@ -117,8 +117,11 @@ public sealed class AwgConfig
         return new AwgConfig(iface, peer);
     }
 
-    /// <summary>Текст .conf для службы AmneziaWG с нашими маршрутами.</summary>
-    public string ToConf(IEnumerable<string> allowedIps)
+    /// <summary>
+    /// Текст .conf для службы AmneziaWG. <paramref name="tableOff"/> — служба не создаёт маршруты
+    /// (и не включает блокировку остального трафика): маршрутами управляет программа (<see cref="TunnelRoutes"/>).
+    /// </summary>
+    public string ToConf(IEnumerable<string> allowedIps, bool tableOff = false)
     {
         var routes = string.Join(", ", allowedIps);
         if (routes.Length == 0)
@@ -128,6 +131,8 @@ public sealed class AwgConfig
         sb.AppendLine("[Interface]");
         foreach (var (key, value) in _interface)
             sb.Append(key).Append(" = ").AppendLine(value);
+        if (tableOff)
+            sb.AppendLine("Table = off");
         sb.AppendLine();
         sb.AppendLine("[Peer]");
         foreach (var (key, value) in _peer)

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using ZapretPro.Core.Dns;
 using ZapretPro.Core.Health;
 using ZapretPro.Core.Key;
 using ZapretPro.Core.Vpn;
@@ -358,15 +359,69 @@ public sealed class VpnTests : IDisposable
         public void Crash() => _running = false;
     }
 
+    private sealed class FakeRoutes : IRouteTable
+    {
+        private readonly HashSet<IPNetwork> _routes = [];
+        public int Resets { get; private set; }
+        public IReadOnlyList<string> Installed => _routes.Select(r => r.ToString()).Order().ToList();
+        public void Reset()
+        {
+            Resets++;
+            _routes.Clear();
+        }
+        public bool Add(IPNetwork network) => _routes.Add(network) || true;
+        public void Sync(IReadOnlyCollection<IPNetwork> wanted)
+        {
+            _routes.Clear();
+            _routes.UnionWith(wanted);
+        }
+    }
+
+    private sealed class FakeDnsHijack : IDnsHijack
+    {
+        public bool Active { get; private set; }
+        public string? LastError { get; private set; }
+        public bool FailStart { get; set; }
+        public int Starts { get; private set; }
+        public Func<string, RouteSet?> Classify { get; private set; } = _ => null;
+        public Func<IReadOnlyList<IPAddress>, RouteSet, Task> OnResolved { get; private set; } = (_, _) => Task.CompletedTask;
+
+        public Task<bool> StartAsync(Func<string, RouteSet?> classify, Func<IReadOnlyList<IPAddress>, RouteSet, Task> onResolved, Func<bool> tunnelUp)
+        {
+            Starts++;
+            if (FailStart)
+            {
+                LastError = "порт 53 занят";
+                return Task.FromResult(false);
+            }
+            Active = true;
+            Classify = classify;
+            OnResolved = onResolved;
+            return Task.FromResult(true);
+        }
+
+        public void UpdateClassifier(Func<string, RouteSet?> classify) => Classify = classify;
+
+        public Task StopAsync()
+        {
+            Active = false;
+            return Task.CompletedTask;
+        }
+    }
+
     private readonly List<string> _otherVpns = [];
 
-    private (VpnController Vpn, FakeTunnel Tunnel, KeyStore Keys, FakeTime Time) Controller()
+    private (VpnController Vpn, FakeTunnel Tunnel, KeyStore Keys, FakeTime Time) Controller() => Controller(out _, out _);
+
+    private (VpnController Vpn, FakeTunnel Tunnel, KeyStore Keys, FakeTime Time) Controller(out FakeRoutes routes, out FakeDnsHijack dnsHijack)
     {
         var keys = new KeyStore(Path.Combine(_dir, "key.bin"));
         var tunnel = new FakeTunnel();
         var time = new FakeTime();
         var dns = new FakeDns();
-        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, time,
+        routes = new FakeRoutes();
+        dnsHijack = new FakeDnsHijack();
+        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, routes, dnsHijack, time,
             handshakeWait: TimeSpan.Zero, otherVpns: () => _otherVpns);
         return (vpn, tunnel, keys, time);
     }
@@ -449,36 +504,113 @@ public sealed class VpnTests : IDisposable
     }
 
     [Fact]
-    public async Task Controller_starts_tunnel_once_and_keeps_it_while_routes_are_same()
+    public async Task Controller_starts_tunnel_once_with_table_off_and_manages_routes_itself()
     {
-        var (vpn, tunnel, keys, time) = Controller();
+        var (vpn, tunnel, keys, time) = Controller(out var routes, out var dns);
         keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
 
         var status = await vpn.ApplyAsync(NoFallback, default);
+
         Assert.Equal(VpnState.Connected, status.State);
-        Assert.Equal(2, status.RouteCount);
+        Assert.True(status.SmartDns);
         Assert.Single(tunnel.Started);
-        Assert.Contains("AllowedIPs = 104.18.32.47/32, 160.79.104.0/23", tunnel.Started[0]);
+        Assert.Contains("AllowedIPs = 0.0.0.0/0", tunnel.Started[0]);
+        Assert.Contains("Table = off", tunnel.Started[0]);
+        // Подсеть нейросетей и DNS Cloudflare для вопросов через VPN. При самом первом запуске наш DNS
+        // включается после туннеля, поэтому адреса доменов в этот раз узнаются заранее, как раньше.
+        Assert.Contains("160.79.104.0/23", routes.Installed);
+        Assert.Contains("1.1.1.1/32", routes.Installed);
+        Assert.Contains("1.0.0.1/32", routes.Installed);
+        Assert.True(dns.Active);
 
         time.Now += TimeSpan.FromMinutes(30);
         await vpn.ApplyAsync(NoFallback, default);
         Assert.Single(tunnel.Started);
+        Assert.Equal(1, dns.Starts);
     }
 
     [Fact]
-    public async Task Controller_restarts_tunnel_when_fallback_changes()
+    public async Task Fallback_changes_routes_without_reconnecting_vpn()
     {
-        var (vpn, tunnel, keys, _) = Controller();
+        var (vpn, tunnel, keys, _) = Controller(out var routes, out var dns);
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Null(dns.Classify("telegram.org"));
+
+        await vpn.ApplyAsync(new HashSet<RouteSet> { RouteSet.Telegram }, default);
+        Assert.Contains("149.154.160.0/20", routes.Installed);
+        Assert.Equal(RouteSet.Telegram, dns.Classify("web.telegram.org"));
+
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.DoesNotContain("149.154.160.0/20", routes.Installed);
+        Assert.Null(dns.Classify("web.telegram.org"));
+        Assert.Single(tunnel.Started);
+    }
+
+    [Fact]
+    public async Task Addresses_found_by_our_dns_are_routed_including_subdomains()
+    {
+        var (vpn, _, keys, _) = Controller(out var routes, out var dns);
         keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
         await vpn.ApplyAsync(NoFallback, default);
 
-        await vpn.ApplyAsync(new HashSet<RouteSet> { RouteSet.Telegram }, default);
-        Assert.Equal(2, tunnel.Started.Count);
-        Assert.Contains("149.154.160.0/20", tunnel.Started[1]);
+        Assert.Equal(RouteSet.Ai, dns.Classify("chatgpt.com"));
+        Assert.Equal(RouteSet.Ai, dns.Classify("cdn.assets.chatgpt.com"));
+        Assert.Null(dns.Classify("ya.ru"));
+
+        await dns.OnResolved([IPAddress.Parse("104.18.32.47"), IPAddress.Parse("192.168.1.1"), IPAddress.Parse("203.0.113.10")], RouteSet.Ai);
+
+        Assert.Contains("104.18.32.47/32", routes.Installed);
+        Assert.DoesNotContain("192.168.1.1/32", routes.Installed);   // локальный адрес
+        Assert.DoesNotContain("203.0.113.10/32", routes.Installed);  // сам VPN-сервер
+
+        // Узнанный адрес переживает пересчёт маршрутов
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Contains("104.18.32.47/32", routes.Installed);
+    }
+
+    [Fact]
+    public async Task Learned_addresses_of_fallback_set_leave_with_the_fallback()
+    {
+        var (vpn, _, keys, _) = Controller(out var routes, out var dns);
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+        var telegram = new HashSet<RouteSet> { RouteSet.Telegram };
+        await vpn.ApplyAsync(telegram, default);
+
+        await dns.OnResolved([IPAddress.Parse("95.161.76.100")], RouteSet.Telegram);
+        Assert.Contains("95.161.76.100/32", routes.Installed);
 
         await vpn.ApplyAsync(NoFallback, default);
-        Assert.Equal(3, tunnel.Started.Count);
-        Assert.DoesNotContain("149.154.160.0/20", tunnel.Started[2]);
+        Assert.DoesNotContain("95.161.76.100/32", routes.Installed);
+    }
+
+    [Fact]
+    public async Task Without_our_dns_domains_are_resolved_in_advance()
+    {
+        var (vpn, _, keys, _) = Controller(out var routes, out var dns);
+        dns.FailStart = true;
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+
+        var status = await vpn.ApplyAsync(NoFallback, default);
+        Assert.False(status.SmartDns);
+
+        // Второй проход: DNS не включился — адреса нейросетей узнаём заранее, как раньше
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Contains("104.18.32.47/32", routes.Installed);
+        Assert.Equal(1, dns.Starts); // повтор не раньше чем через 10 минут
+    }
+
+    [Fact]
+    public async Task Our_dns_is_switched_off_with_vpn()
+    {
+        var (vpn, _, keys, _) = Controller(out _, out var dns);
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.True(dns.Active);
+
+        await vpn.StopAsync(default);
+
+        Assert.False(dns.Active);
     }
 
     [Fact]

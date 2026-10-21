@@ -41,7 +41,7 @@ public partial class LogPage : UserControl
         var s = _engine.Status;
         var sb = new StringBuilder();
         sb.AppendLine($"Включено: {(_engine.IsOn ? "да" : "нет")}   zapret: {s.State}   способ: {s.StrategyId ?? "—"} ({s.StrategyNumber} из {s.StrategyCount})");
-        sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}{(s.Vpn.Fallback.Count == 0 ? "" : $", запасной канал: {string.Join(", ", s.Vpn.Fallback)}")}");
+        sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}{(s.Vpn.Fallback.Count == 0 ? "" : $", запасной канал: {string.Join(", ", s.Vpn.Fallback)}")}");
         foreach (var service in Enum.GetValues<Service>())
         {
             var problem = s.LastReport?.Problems.GetValueOrDefault(service);

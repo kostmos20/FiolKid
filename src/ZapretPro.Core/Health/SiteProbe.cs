@@ -31,7 +31,7 @@ public static class SiteProbe
             IPAddress[] addresses;
             try
             {
-                addresses = await Dns.GetHostAddressesAsync(site, ct);
+                addresses = await System.Net.Dns.GetHostAddressesAsync(site, ct);
             }
             catch (SocketException e)
             {
@@ -65,7 +65,7 @@ public static class SiteProbe
             PooledConnectionLifetime = TimeSpan.Zero,
             ConnectCallback = async (context, token) =>
             {
-                var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, family, token);
+                var addresses = await System.Net.Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, family, token);
                 if (addresses.Length == 0)
                     throw new SocketException((int)SocketError.HostNotFound);
                 var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using ZapretPro.Core.Dns;
 using ZapretPro.Core.Health;
 using ZapretPro.Core.Infrastructure;
 using ZapretPro.Core.Key;
@@ -53,10 +54,24 @@ public sealed class AppEngine
         var updatedDir = Path.Combine(AppPaths.DataDir, "lists");
         var zapretLists = Path.Combine(AppPaths.ZapretDir, "lists");
         _lists = new ListUpdater(updatedDir);
+        // Если программа в прошлый раз упала, не вернув DNS Windows, — вернуть первым делом
+        try
+        {
+            Task.Run(() => DnsHijack.RecoverAsync(VpnManager.TunnelName)).Wait(TimeSpan.FromSeconds(20));
+        }
+        catch (AggregateException e)
+        {
+            Write($"Не удалось вернуть DNS после прошлого запуска: {e.InnerException?.Message}");
+        }
+
+        var routes = new TunnelRoutes(VpnManager.TunnelName);
+        routes.Log += Write;
+        var dns = new DnsHijack(VpnManager.TunnelName);
+        dns.Log += Write;
         _vpn = new VpnController(Keys,
             () => new Router(RouteLists.Load(vpnDir, updatedDir,
                 [Path.Combine(zapretLists, "list-general.txt"), Path.Combine(zapretLists, "list-google.txt")])),
-            new VpnManager());
+            new VpnManager(), routes, dns);
         _vpn.Log += Write;
 
         _watchdog = new Watchdog(_zapret, Telegram, _vpn, new HealthChecker(secret), _settings);
@@ -236,7 +251,7 @@ public sealed class AppEngine
         var sb = new StringBuilder();
         sb.AppendLine($"FiolKid {typeof(AppEngine).Assembly.GetName().Version}, {DateTime.Now:yyyy-MM-dd HH:mm}, {Environment.OSVersion}");
         sb.AppendLine($"Включено: {(IsOn ? "да" : "нет")}; состояние: {s.State}; стратегия: {s.StrategyId ?? "—"} ({s.StrategyNumber} из {s.StrategyCount})");
-        sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}; ключ: {KeyState().Text}");
+        sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}; ключ: {KeyState().Text}");
         foreach (var service in Enum.GetValues<Service>())
             sb.AppendLine($"{service}: {Look(service)}{(s.LastReport?.Problems.TryGetValue(service, out var p) == true ? $" — {p}" : "")}");
         if (s.LastReport is { } r)
