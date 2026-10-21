@@ -358,14 +358,67 @@ public sealed class VpnTests : IDisposable
         public void Crash() => _running = false;
     }
 
+    private readonly List<string> _otherVpns = [];
+
     private (VpnController Vpn, FakeTunnel Tunnel, KeyStore Keys, FakeTime Time) Controller()
     {
         var keys = new KeyStore(Path.Combine(_dir, "key.bin"));
         var tunnel = new FakeTunnel();
         var time = new FakeTime();
         var dns = new FakeDns();
-        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, time, handshakeWait: TimeSpan.Zero);
+        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, time,
+            handshakeWait: TimeSpan.Zero, otherVpns: () => _otherVpns);
         return (vpn, tunnel, keys, time);
+    }
+
+    [Fact]
+    public async Task Controller_blames_other_running_vpn()
+    {
+        var (vpn, tunnel, keys, _) = Controller();
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+        tunnel.FailStart = true;
+        _otherVpns.Add("AmneziaVPN (AmneziaVPN TUN)");
+
+        var status = await vpn.ApplyAsync(NoFallback, default);
+
+        Assert.Equal(VpnState.Failed, status.State);
+        Assert.StartsWith("Включён другой VPN (AmneziaVPN (AmneziaVPN TUN))", status.Error);
+        Assert.Contains("служба не встала", status.Error);
+    }
+
+    [Fact]
+    public void Failure_is_taken_from_the_error_line_not_from_shutdown_noise()
+    {
+        const string dump = """
+            2026-10-21 23:09:38.100000: [TUN] [FiolKid] Starting AmneziaWG/3.1.0
+            2026-10-21 23:09:38.200000: [TUN] [FiolKid] Unable to set ips: The object already exists.
+            2026-10-21 23:09:38.300000: [TUN] [FiolKid] Routine: encryption worker 1 - stopped
+            2026-10-21 23:10:42.000000: [TUN] [Other] Unable to do something else
+            2026-10-21 23:10:42.100000: [TUN] [FiolKid] Starting AmneziaWG/3.1.0
+            2026-10-21 23:10:42.110000: [TUN] [FiolKid] Creating network adapter
+            2026-10-21 23:10:42.120000: [TUN] [FiolKid] Unable to set ips: The object already exists.
+            2026-10-21 23:10:42.126965: [TUN] [FiolKid] Routine: encryption worker 3 - stopped
+            2026-10-21 23:10:42.126965: [TUN] [FiolKid] Routine: encryption worker 2 - stopped
+            2026-10-21 23:10:42.130000: [TUN] [FiolKid] Shutting down
+            """;
+
+        Assert.Equal("[FiolKid] Unable to set ips: The object already exists.", VpnManager.FailureFromLog(dump, "FiolKid"));
+        Assert.Equal("журнал AmneziaWG пуст", VpnManager.FailureFromLog("", "FiolKid"));
+    }
+
+    [Fact]
+    public void Other_vpn_adapters_are_recognised_but_ours_and_regular_ones_are_not()
+    {
+        var found = OtherVpn.Filter(
+        [
+            ("Ethernet", "Realtek PCIe GbE Family Controller"),
+            ("FiolKid", "AmneziaWG Tunnel"),
+            ("AmneziaVPN", "AmneziaVPN TUN"),
+            ("Wi-Fi", "Intel(R) Wi-Fi 6 AX201"),
+            ("wg0", "WireGuard Tunnel"),
+        ], "FiolKid");
+
+        Assert.Equal(["AmneziaVPN (AmneziaVPN TUN)", "wg0 (WireGuard Tunnel)"], found);
     }
 
     private static readonly IReadOnlySet<RouteSet> NoFallback = new HashSet<RouteSet>();

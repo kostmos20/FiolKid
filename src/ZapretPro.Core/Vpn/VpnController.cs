@@ -67,15 +67,31 @@ public sealed class VpnController : IVpn
     private string? _runningConf;
     private DateTimeOffset _startedAt;
     private readonly TimeSpan _handshakeWait;
+    private readonly Func<IReadOnlyList<string>> _otherVpns;
 
     public VpnController(KeyStore keys, Func<Router> routerFactory, IVpnTunnel tunnel, TimeProvider? time = null,
-        TimeSpan? handshakeWait = null)
+        TimeSpan? handshakeWait = null, Func<IReadOnlyList<string>>? otherVpns = null)
     {
         _keys = keys;
         _routerFactory = routerFactory;
         _tunnel = tunnel;
         _time = time ?? TimeProvider.System;
         _handshakeWait = handshakeWait ?? HandshakeWait;
+        _otherVpns = otherVpns ?? (() => OtherVpn.Detect(VpnManager.TunnelName));
+    }
+
+    /// <summary>
+    /// Если включён другой VPN, почти наверняка дело в нём — говорим об этом прямо, а техническую причину
+    /// оставляем следом для журнала.
+    /// </summary>
+    private string Explain(string? reason)
+    {
+        var others = _otherVpns();
+        if (others.Count == 0)
+            return reason ?? "неизвестная ошибка";
+        Log?.Invoke($"Включены другие VPN: {string.Join(", ", others)}");
+        return $"Включён другой VPN ({string.Join(", ", others)}). Выключи его: если там тот же ключ, " +
+               $"два VPN мешают друг другу и наш не может подключиться. Подробности: {reason}";
     }
 
     public bool HasKey => _keys.HasKey;
@@ -125,7 +141,7 @@ public sealed class VpnController : IVpn
             if (!await _tunnel.StartAsync(conf, ct))
             {
                 _runningConf = null;
-                return Status = new VpnStatus(VpnState.Failed, 0, fallback, _tunnel.LastError);
+                return Status = new VpnStatus(VpnState.Failed, 0, fallback, Explain(_tunnel.LastError));
             }
             _runningConf = conf;
             _startedAt = _time.GetUtcNow();
@@ -139,7 +155,9 @@ public sealed class VpnController : IVpn
             return Status = new VpnStatus(VpnState.Connecting, _plan.AllowedIps.Count, fallback, null);
 
         Log?.Invoke($"VPN: {_tunnel.LastError}");
-        return Status = new VpnStatus(VpnState.ServerNotResponding, _plan.AllowedIps.Count, fallback, SilentServerMessage);
+        var others = _otherVpns();
+        return Status = new VpnStatus(VpnState.ServerNotResponding, _plan.AllowedIps.Count, fallback,
+            others.Count > 0 ? Explain(_tunnel.LastError) : SilentServerMessage);
     }
 
     /// <summary>Первое рукопожатие происходит через секунду-другую после запуска службы — ждём его, а не проверяем сразу.</summary>

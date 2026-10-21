@@ -181,10 +181,35 @@ public sealed class VpnManager : IVpnTunnel
     private async Task<string> TunnelLogAsync(CancellationToken ct)
     {
         var (_, output) = await RunAsync(AmneziaWg, "/dumplog", ct);
-        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(l => l.Contains(TunnelName, StringComparison.OrdinalIgnoreCase))
-            .TakeLast(3);
-        return string.Join(" | ", lines);
+        return FailureFromLog(output, TunnelName);
+    }
+
+    /// <summary>
+    /// Из журнала AmneziaWG — причина последней остановки нашего туннеля. Последние строки журнала —
+    /// это «worker … stopped» при выключении, они ничего не объясняют: берём строки с ошибкой.
+    /// </summary>
+    internal static string FailureFromLog(string dump, string tunnel)
+    {
+        var lines = dump.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Contains($"[{tunnel}]", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        // Только последний запуск: с последней строки «Starting …»
+        var start = lines.FindLastIndex(l => l.Contains("Starting", StringComparison.OrdinalIgnoreCase));
+        if (start >= 0)
+            lines = lines[start..];
+
+        var meaningful = lines
+            .Where(l => !l.Contains("Routine:", StringComparison.OrdinalIgnoreCase))
+            .Select(l => System.Text.RegularExpressions.Regex.Replace(l, @"^\S+ \S+: (\[TUN\] )?", ""))
+            .ToList();
+        var errors = meaningful
+            .Where(l => System.Text.RegularExpressions.Regex.IsMatch(l, "unable|fail|error|denied|exists|invalid|cannot",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .ToList();
+
+        var picked = (errors.Count > 0 ? errors : meaningful).TakeLast(errors.Count > 0 ? 3 : 5).ToList();
+        return picked.Count > 0 ? string.Join(" | ", picked) : "журнал AmneziaWG пуст";
     }
 
     private static async Task<(int Code, string Output)> RunAsync(string exe, string args, CancellationToken ct)
