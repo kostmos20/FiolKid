@@ -491,3 +491,6 @@ publish/
 
 # Готовые exe из build.ps1
 dist/
+
+# Сторонние файлы из tools/fetch-deps.ps1
+third_party/

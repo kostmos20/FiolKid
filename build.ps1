@@ -7,6 +7,8 @@ $root = $PSScriptRoot
 $dist = Join-Path $root 'dist'
 $work = Join-Path $root 'obj\publish'
 
+& (Join-Path $root 'tools\fetch-deps.ps1')
+
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 
@@ -22,6 +24,22 @@ foreach ($app in $apps) {
     Copy-Item (Join-Path $out $app.Exe) (Join-Path $dist $app.Name)
 }
 
+# zapret: winws + WinDivert + файлы-приманки, списки доменов и наши стратегии
+$third = Join-Path $root 'third_party'
+$zapret = Join-Path $dist 'zapret'
+New-Item -ItemType Directory -Force (Join-Path $zapret 'lists') | Out-Null
+Copy-Item -Recurse (Join-Path $third 'zapret\bin') $zapret
+foreach ($list in 'ipset-all.txt', 'ipset-exclude.txt', 'list-exclude.txt', 'list-general.txt', 'list-google.txt') {
+    Copy-Item (Join-Path $third "zapret\lists\$list") (Join-Path $zapret 'lists')
+}
+Copy-Item (Join-Path $root 'data\strategies.json') $zapret
+
+# Прокси для Telegram
+$tg = Join-Path $dist 'tg-ws-proxy'
+New-Item -ItemType Directory -Force $tg | Out-Null
+Copy-Item (Join-Path $third 'tg-ws-proxy\TgWsProxy_windows.exe') $tg
+
 Write-Host ''
 Write-Host "Готово: $dist" -ForegroundColor Green
-Get-ChildItem $dist | ForEach-Object { '  {0}  ({1:N0} МБ)' -f $_.Name, ($_.Length / 1MB) }
+Get-ChildItem $dist -File | ForEach-Object { '  {0}  ({1:N0} МБ)' -f $_.Name, ($_.Length / 1MB) }
+Get-ChildItem $dist -Directory | ForEach-Object { '  {0}\' -f $_.Name }

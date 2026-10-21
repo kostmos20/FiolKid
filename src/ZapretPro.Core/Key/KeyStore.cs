@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using ZapretPro.Core.Infrastructure;
 
 namespace ZapretPro.Core.Key;
 
@@ -22,8 +23,7 @@ public sealed class KeyStore
         _path = path;
     }
 
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OdnaKnopka", "key.bin");
+    public static string DefaultPath => Path.Combine(AppPaths.DataDir, "key.bin");
 
     public bool HasKey => File.Exists(_path);
 

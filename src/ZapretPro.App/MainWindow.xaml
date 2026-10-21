@@ -1,16 +1,48 @@
 ﻿<Window x:Class="ZapretPro.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:ZapretPro.App"
-        mc:Ignorable="d"
-        Title="Одна кнопка" Height="600" Width="480"
-        WindowStartupLocation="CenterScreen" FontSize="18">
-    <Grid Margin="24">
-        <TextBlock VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap">
-            Это заготовка программы «Одна кнопка».<LineBreak/><LineBreak/>
-            Большая кнопка и индикаторы появятся на этапе 4.
-        </TextBlock>
-    </Grid>
+        Title="Одна кнопка — проверка (этап 2)" Height="720" Width="620"
+        WindowStartupLocation="CenterScreen" FontSize="16">
+    <!-- Временное окно для проверки этапа 2. Интерфейс для бабушки — этап 4. -->
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Top">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                <Button x:Name="StartButton" Content="Запустить" Padding="16,6" Click="Start_Click"/>
+                <Button x:Name="StopButton" Content="Остановить" Padding="16,6" Margin="8,0,0,0" IsEnabled="False" Click="Stop_Click"/>
+                <Button x:Name="CheckButton" Content="Проверить сейчас" Padding="16,6" Margin="8,0,0,0" IsEnabled="False" Click="Check_Click"/>
+            </StackPanel>
+
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="Состояние:" Margin="0,2,12,2"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" x:Name="StateText" Text="остановлено" FontWeight="Bold" Margin="0,2"/>
+                <TextBlock Grid.Row="1" Text="Стратегия:" Margin="0,2,12,2"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" x:Name="StrategyText" Text="—" Margin="0,2"/>
+                <TextBlock Grid.Row="2" Text="YouTube:" Margin="0,2,12,2"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" x:Name="YouTubeText" Text="—" Margin="0,2"/>
+                <TextBlock Grid.Row="3" Text="Discord:" Margin="0,2,12,2"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" x:Name="DiscordText" Text="—" Margin="0,2"/>
+                <TextBlock Grid.Row="4" Text="Telegram:" Margin="0,2,12,2"/>
+                <TextBlock Grid.Row="4" Grid.Column="1" x:Name="TelegramText" Text="—" Margin="0,2"/>
+                <TextBlock Grid.Row="5" Text="Интернет:" Margin="0,2,12,2"/>
+                <TextBlock Grid.Row="5" Grid.Column="1" x:Name="InternetText" Text="—" Margin="0,2"/>
+            </Grid>
+
+            <Button x:Name="TelegramButton" Content="Подключить Telegram к прокси" Padding="16,6" HorizontalAlignment="Left"
+                    IsEnabled="False" Click="Telegram_Click"/>
+            <TextBlock Text="Нужно один раз: Telegram Desktop спросит «Подключить прокси?» — нажми «Подключить»."
+                       TextWrapping="Wrap" FontSize="13" Foreground="Gray" Margin="0,4,0,12"/>
+
+            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="Firebrick" Margin="0,0,0,8" Visibility="Collapsed"/>
+            <TextBlock Text="Журнал:" Margin="0,0,0,4"/>
+        </StackPanel>
+
+        <ListBox x:Name="LogList" FontFamily="Consolas" FontSize="13"/>
+    </DockPanel>
 </Window>
