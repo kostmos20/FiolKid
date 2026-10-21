@@ -181,24 +181,7 @@ public sealed class VpnManager : IVpnTunnel
         }
     }
 
-    /// <summary>Папка с конфигом: доступ только у SYSTEM и администраторов, наследование прав отключено.</summary>
-    private void WriteProtected(string conf)
-    {
-        var dir = Directory.CreateDirectory(_confDir);
-        var security = new DirectorySecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        foreach (var sid in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
-        {
-            security.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(sid, null),
-                FileSystemRights.FullControl,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                PropagationFlags.None,
-                AccessControlType.Allow));
-        }
-        dir.SetAccessControl(security);
-        File.WriteAllText(ConfPath, conf);
-    }
+    private void WriteProtected(string conf) => ProtectedFolder.Write(_confDir, ConfPath, conf);
 
     /// <summary>Последние строки журнала AmneziaWG про наш туннель — для отчёта.</summary>
     private async Task<string> TunnelLogAsync(CancellationToken ct)

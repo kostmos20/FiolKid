@@ -1,15 +1,15 @@
 using System.Net;
 using System.Net.Sockets;
 using ZapretPro.Core.Dns;
-using ZapretPro.Core.Key;
+using ZapretPro.Core.Infrastructure;
 
 namespace ZapretPro.Core.Vpn;
 
 public enum VpnState
 {
-    /// <summary>Ключ ещё не вставлен.</summary>
+    /// <summary>Ни ключа, ни подписки не вставлено.</summary>
     NoKey,
-    /// <summary>Ключ есть, но не подходит (не AmneziaWG или повреждён).</summary>
+    /// <summary>Вставленное не подходит (ключ повреждён, подписка без подходящих серверов и т. п.).</summary>
     BadKey,
     Stopped,
     /// <summary>Туннель только что поднят, ждём первого ответа сервера.</summary>
@@ -26,6 +26,9 @@ public sealed record VpnStatus(VpnState State, int RouteCount, IReadOnlySet<Rout
 
     /// <summary>Работает ли наш DNS (адреса сайтов из списков и их поддоменов добавляются на лету).</summary>
     public bool SmartDns { get; init; }
+
+    /// <summary>Через что сейчас идёт VPN: «ключ Amnezia», «подписка «Quattro VPN»».</summary>
+    public string? Profile { get; init; }
 }
 
 public interface IVpn
@@ -43,14 +46,14 @@ public interface IVpn
 }
 
 /// <summary>
-/// Связывает ключ, туннель, маршруты и наш DNS.
-/// Туннель поднимается с «Table = off» и пускает в шифрование всё, что направит Windows; направляет
-/// программа: подсети из списков — сразу, адреса сайтов из списков (с любыми поддоменами) — в момент,
-/// когда их спросит браузер (<see cref="SmartDns"/>).
+/// Связывает способы подключения (ключ Amnezia, подписка), туннель, маршруты и наш DNS.
+/// Туннель пускает в шифрование всё, что направит Windows; направляет программа: подсети из списков —
+/// сразу, адреса сайтов из списков (с любыми поддоменами) — в момент, когда их спросит браузер (<see cref="SmartDns"/>).
+/// Если вставлено несколько способов — работает тот, что подключается и быстрее; упал — переходим на другой.
 /// </summary>
 public sealed class VpnController : IVpn
 {
-    // Сколько ждать первого рукопожатия сразу после запуска туннеля, и сколько после запуска
+    // Сколько ждать первого ответа сервера сразу после запуска туннеля, и сколько после запуска
     // считать молчание сервера нормальным «подключаюсь», а не «сервер не отвечает»
     private static readonly TimeSpan HandshakeWait = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ConnectingGrace = TimeSpan.FromMinutes(1);
@@ -58,6 +61,12 @@ public sealed class VpnController : IVpn
     private static readonly TimeSpan LearnedLifetime = TimeSpan.FromDays(7);
     // Если наш DNS не запустился, пробуем снова не чаще раза в 10 минут
     private static readonly TimeSpan DnsRetry = TimeSpan.FromMinutes(10);
+    // Способ подключения, который не заработал, откладываем, чтобы не дёргать его каждую проверку
+    private static readonly TimeSpan FailedCooldown = TimeSpan.FromMinutes(15);
+    // Как часто заново сравнивать скорость, если вставлено несколько способов, и насколько другой
+    // должен быть быстрее, чтобы на него перейти
+    private static readonly TimeSpan CompareInterval = TimeSpan.FromDays(1);
+    private const double SwitchIfFasterBy = 0.3;
 
     private static readonly RouteSet[] MatchOrder = [RouteSet.Ai, RouteSet.Blocked, RouteSet.Telegram, RouteSet.Discord, RouteSet.YouTube];
 
@@ -66,43 +75,46 @@ public sealed class VpnController : IVpn
         "выключи его там: один ключ работает только на одном устройстве одновременно. " +
         "Если нигде больше не включён — возможно, знакомый выключил сервер или сменил ключ.";
 
-    private readonly KeyStore _keys;
+    private readonly IReadOnlyList<IVpnProfile> _profiles;
     private readonly Func<Router> _routerFactory;
-    private readonly IVpnTunnel _tunnel;
     private readonly IRouteTable _routes;
     private readonly IDnsHijack? _dns;
+    private readonly SettingsStore? _settings;
     private readonly TimeProvider _time;
     private readonly TimeSpan _handshakeWait;
     private readonly Func<IReadOnlyList<string>> _otherVpns;
+    private readonly Func<CancellationToken, Task<TimeSpan?>> _measure;
 
     private readonly object _lock = new();
     private readonly Dictionary<IPAddress, (RouteSet Set, DateTimeOffset Seen)> _learned = new();
+    private readonly Dictionary<IVpnProfile, DateTimeOffset> _cooldown = new();
     private HashSet<RouteSet> _activeSets = [];
     private IReadOnlyList<IPAddress> _endpoints = [];
 
     private Router? _router;
-    private string? _keyLoaded;
-    private AwgConfig? _config;
-    private string? _keyError;
+    private IVpnProfile? _active;
     private string? _runningConf;
     private DateTimeOffset _startedAt;
+    private DateTimeOffset? _lastCompare;
     private HashSet<RouteSet>? _matcherFor;
     private DateTimeOffset _dnsRetryAt;
 
-    public VpnController(KeyStore keys, Func<Router> routerFactory, IVpnTunnel tunnel, IRouteTable routes, IDnsHijack? dns,
-        TimeProvider? time = null, TimeSpan? handshakeWait = null, Func<IReadOnlyList<string>>? otherVpns = null)
+    public VpnController(IReadOnlyList<IVpnProfile> profiles, Func<Router> routerFactory, IRouteTable routes, IDnsHijack? dns,
+        SettingsStore? settings = null, TimeProvider? time = null, TimeSpan? handshakeWait = null,
+        Func<IReadOnlyList<string>>? otherVpns = null, Func<CancellationToken, Task<TimeSpan?>>? measure = null)
     {
-        _keys = keys;
+        _profiles = profiles;
         _routerFactory = routerFactory;
-        _tunnel = tunnel;
         _routes = routes;
         _dns = dns;
+        _settings = settings;
         _time = time ?? TimeProvider.System;
         _handshakeWait = handshakeWait ?? HandshakeWait;
         _otherVpns = otherVpns ?? (() => OtherVpn.Detect(VpnManager.TunnelName));
+        _measure = measure ?? TunnelProbe.MeasureAsync;
     }
 
-    public bool HasKey => _keys.HasKey;
+    public bool HasKey => _profiles.Any(p => p.Configured);
 
     /// <summary>Последние сайты, которые наш DNS отправил в VPN, — для отчёта.</summary>
     public IReadOnlyList<string> RecentDns => _dns?.Recent ?? [];
@@ -117,68 +129,175 @@ public sealed class VpnController : IVpn
     public async Task<VpnStatus> ApplyAsync(IReadOnlySet<RouteSet> fallback, CancellationToken ct)
     {
         var sets = new HashSet<RouteSet>(fallback) { RouteSet.Ai, RouteSet.Blocked };
+        var configured = _profiles.Where(p => p.Configured).ToList();
 
-        if (!LoadKey())
+        if (configured.Count == 0)
         {
             await StopAllAsync(ct);
-            return Status = new VpnStatus(_keyError is null ? VpnState.NoKey : VpnState.BadKey, 0, fallback, _keyError);
+            return Status = new VpnStatus(VpnState.NoKey, 0, fallback, null);
         }
 
-        RoutePlan plan;
+        if (_active is not null && !configured.Contains(_active))
+        {
+            // Ключ или подписку удалили — снимаем этот туннель
+            await StopTunnelAsync(ct);
+            _active = null;
+        }
+
+        // Вставлено несколько способов — при первом запуске и раз в сутки выбираем быстрый
+        if (configured.Count > 1 && (_lastCompare is null || _time.GetUtcNow() - _lastCompare >= CompareInterval))
+            await CompareAsync(configured, sets, fallback, ct);
+
+        VpnStatus? last = null;
+        foreach (var profile in Candidates(configured))
+        {
+            var (status, ok) = await TryProfileAsync(profile, sets, fallback, ct);
+            last = status;
+            if (ok)
+                return Status = status;
+
+            if (configured.Count > 1)
+            {
+                _cooldown[profile] = _time.GetUtcNow() + FailedCooldown;
+                Log?.Invoke($"VPN через {profile.Name} не работает: {status.Error}");
+            }
+        }
+        return Status = last!;
+    }
+
+    /// <summary>Порядок попыток: текущий, затем запомненный как быстрый, затем остальные; отложенные — в конце.</summary>
+    private IEnumerable<IVpnProfile> Candidates(List<IVpnProfile> configured)
+    {
+        var now = _time.GetUtcNow();
+        var preferred = _settings?.Load().PreferredVpn;
+        return configured
+            .OrderBy(p => _cooldown.TryGetValue(p, out var until) && until > now ? 1 : 0)
+            .ThenBy(p => p == _active ? 0 : 1)
+            .ThenBy(p => p.Id == preferred ? 0 : 1)
+            .ToList();
+    }
+
+    /// <summary>Поднять туннель через этот способ (если ещё не поднят), маршруты, DNS. Ok = работает или ещё подключается.</summary>
+    private async Task<(VpnStatus Status, bool Ok)> TryProfileAsync(IVpnProfile profile, HashSet<RouteSet> sets,
+        IReadOnlySet<RouteSet> fallback, CancellationToken ct)
+    {
+        var plan = await profile.PrepareAsync(ct);
+        if (plan is null)
+            return (new VpnStatus(VpnState.BadKey, 0, fallback, profile.Error) { Profile = profile.Name }, false);
+
+        if (profile != _active)
+        {
+            await StopTunnelAsync(ct);
+            _active = profile;
+        }
+
+        var health = plan.Conf == _runningConf ? await profile.Tunnel.GetHealthAsync(ct) : TunnelHealth.Stopped;
+        var justStarted = false;
+        if (health == TunnelHealth.Stopped)
+        {
+            Log?.Invoke($"Подключаю VPN: {profile.Name}");
+            await StopTunnelAsync(ct);
+            _active = profile;
+            _routes.Reset();
+            if (!await profile.Tunnel.StartAsync(plan.Conf, ct))
+                return (new VpnStatus(VpnState.Failed, 0, fallback, Explain(profile.Tunnel.LastError)) { Profile = profile.Name }, false);
+            _runningConf = plan.Conf;
+            _startedAt = _time.GetUtcNow();
+            justStarted = true;
+        }
+
+        RoutePlan routes;
         try
         {
             _router ??= _routerFactory();
             // Пока работает наш DNS, домены заранее не резолвим — их адреса придут на лету
-            plan = await _router.ComputeAsync(sets, _config!.EndpointHost, ct, resolveDomains: _dns is not { Active: true });
+            routes = await _router.ComputeAsync(sets, plan.EndpointHosts, ct, resolveDomains: _dns is not { Active: true });
         }
         catch (InvalidDataException e)
         {
-            return Status = new VpnStatus(VpnState.Failed, 0, fallback, e.Message);
+            return (new VpnStatus(VpnState.Failed, 0, fallback, e.Message) { Profile = profile.Name }, false);
         }
-        foreach (var warning in plan.Warnings)
+        foreach (var warning in routes.Warnings)
             Log?.Invoke(warning);
-
         lock (_lock)
         {
             _activeSets = sets;
-            _endpoints = plan.Endpoints;
+            _endpoints = routes.Endpoints;
         }
 
-        // Конфиг от маршрутов больше не зависит: туннель перезапускается только при смене ключа или если упал
-        var conf = _config!.ToConf(["0.0.0.0/0"], tableOff: true);
-        var health = conf == _runningConf ? await _tunnel.GetHealthAsync(ct) : TunnelHealth.Stopped;
-
-        if (health == TunnelHealth.Stopped)
-        {
-            Log?.Invoke("Подключаю VPN");
-            _routes.Reset();
-            if (!await _tunnel.StartAsync(conf, ct))
-            {
-                _runningConf = null;
-                return Status = new VpnStatus(VpnState.Failed, 0, fallback, Explain(_tunnel.LastError));
-            }
-            _runningConf = conf;
-            _startedAt = _time.GetUtcNow();
-        }
-
-        SyncRoutes(plan);
+        SyncRoutes(routes);
         await EnsureDnsAsync(sets);
 
-        if (health == TunnelHealth.Stopped)
-            health = await WaitForHandshakeAsync(ct);
+        if (justStarted)
+            health = await WaitForHandshakeAsync(profile.Tunnel, ct);
 
         var count = _routes.Installed.Count;
         var smart = _dns is { Active: true };
         if (health == TunnelHealth.Connected)
-            return Status = new VpnStatus(VpnState.Connected, count, fallback, null) { SmartDns = smart };
-
+        {
+            _cooldown.Remove(profile);
+            return (new VpnStatus(VpnState.Connected, count, fallback, null) { SmartDns = smart, Profile = profile.Name }, true);
+        }
         if (_time.GetUtcNow() - _startedAt < ConnectingGrace)
-            return Status = new VpnStatus(VpnState.Connecting, count, fallback, null) { SmartDns = smart };
+            return (new VpnStatus(VpnState.Connecting, count, fallback, null) { SmartDns = smart, Profile = profile.Name }, true);
 
-        Log?.Invoke($"VPN: {_tunnel.LastError}");
+        Log?.Invoke($"VPN: {profile.Tunnel.LastError}");
         var others = _otherVpns();
-        return Status = new VpnStatus(VpnState.ServerNotResponding, count, fallback,
-            others.Count > 0 ? Explain(_tunnel.LastError) : SilentServerMessage) { SmartDns = smart };
+        var message = others.Count > 0 ? Explain(profile.Tunnel.LastError)
+            : profile is AmneziaProfile ? SilentServerMessage
+            : $"Серверы {profile.Name} не отвечают.";
+        return (new VpnStatus(VpnState.ServerNotResponding, count, fallback, message) { SmartDns = smart, Profile = profile.Name }, false);
+    }
+
+    /// <summary>
+    /// Поднимает по очереди каждый способ, меряет задержку через туннель и оставляет самый быстрый.
+    /// Уже работающий меняем, только если другой заметно быстрее — чтобы не прыгать туда-сюда.
+    /// </summary>
+    private async Task CompareAsync(List<IVpnProfile> configured, HashSet<RouteSet> sets, IReadOnlySet<RouteSet> fallback,
+        CancellationToken ct)
+    {
+        _lastCompare = _time.GetUtcNow();
+        Log?.Invoke($"Сравниваю скорость: {string.Join(" и ", configured.Select(p => p.Name))}");
+
+        var results = new List<(IVpnProfile Profile, TimeSpan Latency)>();
+        foreach (var profile in configured)
+        {
+            var (status, _) = await TryProfileAsync(profile, sets, fallback, ct);
+            if (status.State is not (VpnState.Connected or VpnState.Connecting))
+                continue;
+            // Медиана из трёх замеров — один случайно медленный ответ не решает
+            var samples = new List<TimeSpan>();
+            for (var i = 0; i < 3; i++)
+            {
+                if (await _measure(ct) is { } latency)
+                    samples.Add(latency);
+            }
+            if (samples.Count == 0)
+                continue;
+            var median = samples.Order().ElementAt(samples.Count / 2);
+            Log?.Invoke($"{profile.Name}: {median.TotalMilliseconds:0} мс");
+            results.Add((profile, median));
+        }
+
+        if (results.Count == 0)
+            return;
+
+        var best = results.MinBy(r => r.Latency);
+        var preferredName = _settings?.Load().PreferredVpn;
+        var current = results.FirstOrDefault(r => r.Profile.Id == preferredName);
+        // Прежний выбор оставляем, если новый быстрее несильно
+        var winner = current.Profile is not null && best.Latency.TotalMilliseconds > current.Latency.TotalMilliseconds * (1 - SwitchIfFasterBy)
+            ? current
+            : best;
+        _settings?.Update(s => s.PreferredVpn = winner.Profile.Id);
+        Log?.Invoke($"Выбран VPN: {winner.Profile.Name}");
+
+        // Последним подняли не победителя — переподнимем победителя в общем цикле
+        if (_active != winner.Profile)
+        {
+            await StopTunnelAsync(ct);
+            _active = winner.Profile;
+        }
     }
 
     /// <summary>
@@ -259,13 +378,13 @@ public sealed class VpnController : IVpn
         }
     }
 
-    /// <summary>Первое рукопожатие происходит через секунду-другую после запуска службы — ждём его, а не проверяем сразу.</summary>
-    private async Task<TunnelHealth> WaitForHandshakeAsync(CancellationToken ct)
+    /// <summary>Первый ответ сервера приходит через секунду-другую после запуска — ждём его, а не проверяем сразу.</summary>
+    private async Task<TunnelHealth> WaitForHandshakeAsync(IVpnTunnel tunnel, CancellationToken ct)
     {
         var deadline = _time.GetUtcNow() + _handshakeWait;
         while (true)
         {
-            var health = await _tunnel.GetHealthAsync(ct);
+            var health = await tunnel.GetHealthAsync(ct);
             if (health != TunnelHealth.NoHandshake || _time.GetUtcNow() >= deadline)
                 return health;
             await Task.Delay(TimeSpan.FromSeconds(1), _time, ct);
@@ -293,40 +412,17 @@ public sealed class VpnController : IVpn
         _matcherFor = null;
     }
 
+    /// <summary>Вставили или удалили ключ или подписку — заново выбрать способ подключения.</summary>
+    public void ProfilesChanged()
+    {
+        _lastCompare = null;
+        _cooldown.Clear();
+    }
+
     public async Task StopAsync(CancellationToken ct)
     {
         await StopAllAsync(ct);
         Status = Status with { State = HasKey ? VpnState.Stopped : VpnState.NoKey, RouteCount = 0, SmartDns = false };
-    }
-
-    /// <summary>Читает ключ заново, если его заменили. Возвращает false, если ключа нет или он негодный.</summary>
-    private bool LoadKey()
-    {
-        var key = _keys.Load();
-        if (key is null)
-        {
-            _keyLoaded = null;
-            _config = null;
-            _keyError = _keys.HasKey ? "Сохранённый ключ не читается. Вставь ключ заново." : null;
-            return false;
-        }
-
-        if (key == _keyLoaded)
-            return _config is not null;
-
-        _keyLoaded = key;
-        try
-        {
-            _config = AwgConfig.FromKey(KeyParser.Parse(key));
-            _keyError = null;
-            return true;
-        }
-        catch (KeyParseException e)
-        {
-            _config = null;
-            _keyError = e.Message;
-            return false;
-        }
     }
 
     /// <summary>Сначала вернуть DNS Windows, потом снять туннель — чтобы ни секунды не остаться без DNS.</summary>
@@ -335,11 +431,16 @@ public sealed class VpnController : IVpn
         if (_dns is { Active: true })
             await _dns.StopAsync();
         _matcherFor = null;
+        await StopTunnelAsync(ct);
+        _active = null;
+    }
 
-        if (_runningConf is null)
+    private async Task StopTunnelAsync(CancellationToken ct)
+    {
+        if (_runningConf is null || _active is null)
             return;
-        Log?.Invoke("Отключаю VPN");
-        await _tunnel.StopAsync(ct);
+        Log?.Invoke($"Отключаю VPN: {_active.Name}");
+        await _active.Tunnel.StopAsync(ct);
         _runningConf = null;
         _routes.Reset();
     }

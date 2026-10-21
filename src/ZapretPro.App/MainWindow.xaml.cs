@@ -139,19 +139,20 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PasteKey()
+    private async void PasteKey()
     {
         var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
         if (string.IsNullOrWhiteSpace(text))
         {
-            ShowToast("Сначала скопируй ключ, который прислал знакомый (он начинается с vpn://)");
+            ShowToast("Сначала скопируй ключ (vpn://…) или ссылку на подписку (https://…)");
             return;
         }
+        ShowToast("Проверяю…");
         try
         {
-            _engine.SaveKey(text);
+            var saved = await _engine.SaveKeyAsync(text);
             Clipboard.Clear();
-            ShowToast("Ключ вставлен");
+            ShowToast(saved);
             Refresh();
         }
         catch (KeyParseException ex)

@@ -15,6 +15,9 @@ public sealed class AppSettings
 
     /// <summary>Была ли программа включена, когда её закрыли: при следующем запуске включится сама.</summary>
     public bool Enabled { get; set; }
+
+    /// <summary>Какой способ VPN оказался быстрее, если вставлено несколько (имя профиля).</summary>
+    public string? PreferredVpn { get; set; }
 }
 
 /// <summary>Настройки в JSON-файле. Битый или отсутствующий файл — просто настройки по умолчанию.</summary>

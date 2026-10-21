@@ -423,8 +423,8 @@ public sealed class VpnTests : IDisposable
         var dns = new FakeDns();
         routes = new FakeRoutes();
         dnsHijack = new FakeDnsHijack();
-        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, routes, dnsHijack, time,
-            handshakeWait: TimeSpan.Zero, otherVpns: () => _otherVpns);
+        var vpn = new VpnController([new AmneziaProfile(keys, tunnel)], () => new Router(Lists(), dns.Resolve, time), routes, dnsHijack,
+            time: time, handshakeWait: TimeSpan.Zero, otherVpns: () => _otherVpns);
         return (vpn, tunnel, keys, time);
     }
 

@@ -175,15 +175,19 @@ public sealed class Router
     /// False — домены не резолвить заранее: их адреса добавит наш DNS в момент, когда браузер их спросит
     /// (<see cref="Dns.SmartDns"/>). True — запасной путь, если наш DNS не запустился.
     /// </param>
-    public async Task<RoutePlan> ComputeAsync(IReadOnlySet<RouteSet> sets, string endpointHost, CancellationToken ct,
+    public Task<RoutePlan> ComputeAsync(IReadOnlySet<RouteSet> sets, string endpointHost, CancellationToken ct,
+        bool resolveDomains = true) => ComputeAsync(sets, [endpointHost], ct, resolveDomains);
+
+    /// <param name="endpointHosts">Адреса VPN-серверов (у подписки их несколько) — их нельзя пускать в сам туннель.</param>
+    public async Task<RoutePlan> ComputeAsync(IReadOnlySet<RouteSet> sets, IReadOnlyList<string> endpointHosts, CancellationToken ct,
         bool resolveDomains = true)
     {
         var warnings = new List<string>();
         var now = _time.GetUtcNow();
 
-        var endpoints = IPAddress.TryParse(endpointHost, out var endpointIp)
-            ? [endpointIp]
-            : await ResolveAsync(endpointHost, ct);
+        var resolvedEndpoints = await Task.WhenAll(endpointHosts.Select(async host =>
+            IPAddress.TryParse(host, out var ip) ? [ip] : await ResolveAsync(host, ct)));
+        var endpoints = resolvedEndpoints.SelectMany(a => a).Distinct().ToArray();
         if (endpoints.Length == 0)
             warnings.Add("Не удалось узнать IP VPN-сервера");
 

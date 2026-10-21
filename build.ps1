@@ -48,10 +48,16 @@ New-Item -ItemType Directory -Force $awg | Out-Null
 Copy-Item (Join-Path $third 'amneziawg\*') $awg -Exclude '.sha256', '.source'
 Copy-Item -Recurse (Join-Path $root 'data\vpn') $stage
 
+# VPN по ссылке-подписке: sing-box
+$sb = Join-Path $stage 'sing-box'
+New-Item -ItemType Directory -Force $sb | Out-Null
+Copy-Item (Join-Path $third 'sing-box\*') $sb -Exclude '.sha256', '.source'
+
 # Версии компонентов — их показывает раздел «Обновления» в настройках
 $versions = @(
     "Прокси Telegram = $((Get-Content (Join-Path $third 'tg-ws-proxy\.source') -Raw).Trim())",
-    "VPN (AmneziaWG) = $((Get-Content (Join-Path $third 'amneziawg\.source') -Raw).Trim())"
+    "VPN (AmneziaWG) = $((Get-Content (Join-Path $third 'amneziawg\.source') -Raw).Trim())",
+    "VPN по подписке (sing-box) = $((Get-Content (Join-Path $third 'sing-box\.source') -Raw).Trim())"
 )
 [IO.File]::WriteAllLines((Join-Path $stage 'versions.txt'), [string[]]$versions, (New-Object Text.UTF8Encoding $false))
 

@@ -68,10 +68,13 @@ public sealed class AppEngine
         routes.Log += Write;
         var dns = new DnsHijack(VpnManager.TunnelName);
         dns.Log += Write;
-        _vpn = new VpnController(Keys,
+        _amnezia = new AmneziaProfile(Keys, new VpnManager());
+        _subscription = new SubscriptionProfile(Subscriptions, _subscriptionClient, new SingBoxTunnel());
+        _subscription.Log += Write;
+        _vpn = new VpnController([_amnezia, _subscription],
             () => new Router(RouteLists.Load(vpnDir, updatedDir,
                 [Path.Combine(zapretLists, "list-general.txt"), Path.Combine(zapretLists, "list-google.txt")])),
-            new VpnManager(), routes, dns);
+            routes, dns, _settings);
         _vpn.Log += Write;
 
         _watchdog = new Watchdog(_zapret, Telegram, _vpn, new HealthChecker(secret), _settings);
@@ -84,7 +87,12 @@ public sealed class AppEngine
         Status = _watchdog.Status;
     }
 
+    private readonly AmneziaProfile _amnezia;
+    private readonly SubscriptionProfile _subscription;
+    private readonly SubscriptionClient _subscriptionClient = new();
+
     public KeyStore Keys { get; } = new();
+    public SubscriptionStore Subscriptions { get; } = new();
     public TelegramProxy Telegram { get; }
     public WatchdogStatus Status { get; private set; }
     public bool IsOn => _run is not null;
@@ -165,24 +173,74 @@ public sealed class AppEngine
         }
     }
 
-    /// <summary>Проверяет и сохраняет ключ. Сначала полная проверка, и только потом замена прежнего.</summary>
-    public string SaveKey(string text)
+    /// <summary>
+    /// Вставили ключ или ссылку: сама понимает, что это. Ключ Amnezia (vpn://) проверяет и сохраняет;
+    /// ссылку-подписку сначала скачивает и проверяет, что в ней есть подходящие серверы. Прежнее
+    /// заменяется только после успешной проверки. Возвращает, что сохранено — для подсказки.
+    /// </summary>
+    public async Task<string> SaveKeyAsync(string text)
     {
-        AwgConfig.FromKey(KeyParser.Parse(text));
-        var parsed = Keys.Save(text);
-        Write($"Ключ сохранён: {VpnProtocolInfo.DisplayName(parsed.Protocol)}");
-        _ = CheckNowAsync();
-        return VpnProtocolInfo.DisplayName(parsed.Protocol);
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith(KeyParser.Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            AwgConfig.FromKey(KeyParser.Parse(trimmed));
+            var parsed = Keys.Save(trimmed);
+            Write($"Ключ сохранён: {VpnProtocolInfo.DisplayName(parsed.Protocol)}");
+            AfterCredentialsChanged();
+            return "Ключ Amnezia вставлен";
+        }
+
+        if (!SubscriptionClient.LooksLikeSubscription(trimmed))
+            throw new KeyParseException("Это не ключ и не ссылка на подписку. Ключ начинается с vpn://, ссылка — с https://");
+
+        CachedSubscription loaded;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            loaded = await _subscriptionClient.LoadAsync(trimmed, TimeProvider.System, cts.Token);
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or UriFormatException)
+        {
+            throw new KeyParseException($"Ссылка не открылась — проверь, что скопировал её целиком. ({e.Message})");
+        }
+
+        var parsedSub = SubscriptionParser.Parse(loaded.Body, loaded.Headers);
+        if (parsedSub.Servers.Count == 0)
+            throw new KeyParseException("В подписке нет серверов, с которыми умеет работать программа.");
+
+        Subscriptions.SaveSource(trimmed);
+        Subscriptions.SaveCache(loaded);
+        var name = parsedSub.Title is { Length: > 0 } t ? $"«{t}»" : "";
+        Write($"Подписка {name} сохранена: серверов {parsedSub.Servers.Count}" +
+              (parsedSub.Skipped > 0 ? $", пропущено неподдерживаемых {parsedSub.Skipped}" : ""));
+        AfterCredentialsChanged();
+        return $"Подписка {name} вставлена: {parsedSub.Servers.Count} серверов";
     }
 
     public void DeleteKey()
     {
         Keys.Delete();
-        Write("Ключ удалён");
+        Write("Ключ Amnezia удалён");
+        AfterCredentialsChanged();
+    }
+
+    public void DeleteSubscription()
+    {
+        Subscriptions.Delete();
+        Write("Подписка удалена");
+        AfterCredentialsChanged();
+    }
+
+    private void AfterCredentialsChanged()
+    {
+        _vpn.ProfilesChanged();
         _ = CheckNowAsync();
     }
 
-    /// <summary>Что с ключом — человеческими словами.</summary>
+    /// <summary>Есть ли хоть что-то для VPN.</summary>
+    public bool HasVpnCredentials => Keys.HasKey || Subscriptions.HasSubscription;
+
+    /// <summary>Что с ключом Amnezia — человеческими словами.</summary>
     public (bool Ok, string Text) KeyState()
     {
         var key = Keys.Load();
@@ -191,7 +249,7 @@ public sealed class AppEngine
         try
         {
             AwgConfig.FromKey(KeyParser.Parse(key));
-            return (true, "Ключ вставлен и подходит");
+            return (true, "Ключ Amnezia вставлен и подходит");
         }
         catch (KeyParseException e)
         {
@@ -199,11 +257,27 @@ public sealed class AppEngine
         }
     }
 
+    /// <summary>Что с подпиской: название, сколько серверов, до какого числа. Без ссылки и паролей.</summary>
+    public (bool Ok, string Text) SubscriptionState()
+    {
+        if (!Subscriptions.HasSubscription)
+            return (false, "Подписки нет");
+        var cache = Subscriptions.LoadCache();
+        if (cache is null)
+            return (false, "Подписка вставлена, но ещё не скачалась");
+        var info = SubscriptionParser.Parse(cache.Body, cache.Headers);
+        var title = info.Title is { Length: > 0 } t ? $"«{t}»" : "";
+        var until = info.Expires is { } e ? $", до {e.ToLocalTime():dd.MM.yyyy}" : "";
+        var expired = info.Expires is { } ex && ex < DateTimeOffset.UtcNow;
+        return (info.Servers.Count > 0 && !expired,
+            expired ? $"Подписка {title}: срок закончился{until}" : $"Подписка {title}: серверов {info.Servers.Count}{until}");
+    }
+
     public ServiceLook Look(Service service)
     {
         var s = Status;
         if (!IsOn)
-            return service == Service.Ai && !KeyState().Ok ? ServiceLook.NeedsKey : ServiceLook.Off;
+            return service == Service.Ai && !HasVpnCredentials ? ServiceLook.NeedsKey : ServiceLook.Off;
 
         if (service == Service.Ai && s.Vpn.State is VpnState.NoKey or VpnState.BadKey)
             return ServiceLook.NeedsKey;
@@ -251,7 +325,8 @@ public sealed class AppEngine
         var sb = new StringBuilder();
         sb.AppendLine($"FiolKid {typeof(AppEngine).Assembly.GetName().Version}, {DateTime.Now:yyyy-MM-dd HH:mm}, {Environment.OSVersion}");
         sb.AppendLine($"Включено: {(IsOn ? "да" : "нет")}; состояние: {s.State}; стратегия: {s.StrategyId ?? "—"} ({s.StrategyNumber} из {s.StrategyCount})");
-        sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}; ключ: {KeyState().Text}");
+        sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}");
+        sb.AppendLine($"VPN через: {s.Vpn.Profile ?? "—"}; {KeyState().Text}; {SubscriptionState().Text}");
         foreach (var service in Enum.GetValues<Service>())
             sb.AppendLine($"{service}: {Look(service)}{(s.LastReport?.Problems.TryGetValue(service, out var p) == true ? $" — {p}" : "")}");
         if (s.LastReport is { } r)

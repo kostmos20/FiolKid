@@ -5,22 +5,29 @@
         <StackPanel Margin="20,4,20,16">
             <TextBlock Text="Настройки" FontSize="28" FontWeight="SemiBold" Margin="0,0,0,16"/>
 
-            <!-- Ключ -->
+            <!-- Ключ и подписка -->
             <Border Style="{StaticResource Card}">
                 <StackPanel>
                     <TextBlock Text="Ключ VPN" FontSize="20" FontWeight="SemiBold"/>
-                    <TextBlock Text="Нужен для нейросетей и заблокированных сайтов. Его даёт знакомый, он начинается с vpn://"
+                    <TextBlock Text="Нужен для нейросетей и заблокированных сайтов. Подойдёт ключ Amnezia (vpn://…) или ссылка на подписку (https://…). Можно вставить и то и другое — программа сама выберет, что работает быстрее."
                                FontSize="15" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,12"/>
-                    <StackPanel Orientation="Horizontal">
+
+                    <DockPanel Margin="0,0,0,8">
+                        <Button x:Name="DeleteKeyButton" DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Content="Удалить"
+                                Padding="12,6" FontSize="15" Click="DeleteKey_Click"/>
                         <Ellipse x:Name="KeyDot" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="KeyText" FontSize="18" Margin="8,0,0,0" TextWrapping="Wrap" MaxWidth="380"/>
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                        <Button x:Name="PasteKeyButton" Style="{StaticResource PillButton}" Content="Вставить ключ" Click="PasteKey_Click"/>
-                        <Button x:Name="DeleteKeyButton" Style="{StaticResource SecondaryButton}" Content="Удалить" Margin="10,0,0,0"
-                                Click="DeleteKey_Click"/>
-                    </StackPanel>
-                    <TextBlock Text="Скопируй ключ из сообщения и нажми «Вставить ключ». Сам ключ на экране не показывается."
+                        <TextBlock x:Name="KeyText" FontSize="17" Margin="8,0,8,0" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <DockPanel>
+                        <Button x:Name="DeleteSubscriptionButton" DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Content="Удалить"
+                                Padding="12,6" FontSize="15" Click="DeleteSubscription_Click"/>
+                        <Ellipse x:Name="SubscriptionDot" Width="12" Height="12" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SubscriptionText" FontSize="17" Margin="8,0,8,0" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    </DockPanel>
+
+                    <Button x:Name="PasteKeyButton" Style="{StaticResource PillButton}" Content="Вставить ключ или ссылку"
+                            HorizontalAlignment="Left" Margin="0,14,0,0" Click="PasteKey_Click"/>
+                    <TextBlock Text="Скопируй ключ или ссылку из сообщения и нажми кнопку. Сами ключи и ссылки на экране не показываются."
                                FontSize="14" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                 </StackPanel>
             </Border>

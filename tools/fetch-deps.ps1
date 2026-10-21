@@ -35,6 +35,14 @@ $deps = @(
         Sha256 = 'a1b48ea8699cd347832a3691d832004574ef8ad65bcf887611ac8acb99b7de8b'
         Unzip  = $false
         Msi    = $true
+    },
+    @{
+        # Ядро для VPN по ссылке-подписке (VLESS Reality, Hysteria2 и др.)
+        Name   = 'sing-box'
+        Source = 'SagerNet/sing-box v1.14.3'
+        Url    = 'https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip'
+        Sha256 = 'd8b86ef58936dba9230ec6a57ffa4243933f3c14ef4809828b6c553440ed1518'
+        Unzip  = $true
     }
 )
 

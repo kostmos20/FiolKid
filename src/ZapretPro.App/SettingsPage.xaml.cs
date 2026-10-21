@@ -11,6 +11,7 @@ public partial class SettingsPage : UserControl
 {
     private AppEngine _engine = null!;
     private bool _confirmDelete;
+    private bool _confirmDeleteSubscription;
 
     public SettingsPage()
     {
@@ -31,19 +32,25 @@ public partial class SettingsPage : UserControl
     {
         var (keyOk, keyText) = _engine.KeyState();
         KeyText.Text = keyText;
-        KeyDot.Fill = Brush(keyOk ? "GreenBrush" : _engine.Keys.HasKey ? "RedBrush" : "AmberBrush");
-        PasteKeyButton.Content = _engine.Keys.HasKey ? "Заменить ключ" : "Вставить ключ";
+        KeyDot.Fill = Brush(keyOk ? "GreenBrush" : _engine.Keys.HasKey ? "RedBrush" : "GrayBrush");
         DeleteKeyButton.Visibility = _engine.Keys.HasKey ? Visibility.Visible : Visibility.Collapsed;
         if (!_confirmDelete)
             DeleteKeyButton.Content = "Удалить";
+
+        var (subOk, subText) = _engine.SubscriptionState();
+        SubscriptionText.Text = subText;
+        SubscriptionDot.Fill = Brush(subOk ? "GreenBrush" : _engine.Subscriptions.HasSubscription ? "RedBrush" : "GrayBrush");
+        DeleteSubscriptionButton.Visibility = _engine.Subscriptions.HasSubscription ? Visibility.Visible : Visibility.Collapsed;
+        if (!_confirmDeleteSubscription)
+            DeleteSubscriptionButton.Content = "Удалить";
 
         var vpn = _engine.Status.Vpn;
         var (text, color) = !_engine.IsOn
             ? ("Выключено — включи программу на главной", "GrayBrush")
             : vpn.State switch
             {
-                VpnState.Connected => ("Подключено", "GreenBrush"),
-                VpnState.Connecting => ("Подключаюсь…", "AmberBrush"),
+                VpnState.Connected => ($"Подключено: {vpn.Profile}", "GreenBrush"),
+                VpnState.Connecting => ($"Подключаюсь: {vpn.Profile}…", "AmberBrush"),
                 VpnState.NoKey => ("Нет ключа", "AmberBrush"),
                 VpnState.BadKey => ("Ключ не подходит", "RedBrush"),
                 VpnState.ServerNotResponding => ("Сервер не отвечает", "RedBrush"),
@@ -61,24 +68,45 @@ public partial class SettingsPage : UserControl
         VersionsList.ItemsSource = _engine.ComponentVersions().Select(v => new { Item1 = v.Name, Item2 = v.Version }).ToList();
     }
 
-    private void PasteKey_Click(object sender, RoutedEventArgs e)
+    private async void PasteKey_Click(object sender, RoutedEventArgs e)
     {
         var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
         if (string.IsNullOrWhiteSpace(text))
         {
-            Toast?.Invoke("Сначала скопируй ключ (он начинается с vpn://), потом нажми эту кнопку");
+            Toast?.Invoke("Сначала скопируй ключ (vpn://…) или ссылку на подписку (https://…), потом нажми эту кнопку");
             return;
         }
+        PasteKeyButton.IsEnabled = false;
+        PasteKeyButton.Content = "Проверяю…";
         try
         {
-            _engine.SaveKey(text);
+            Toast?.Invoke(await _engine.SaveKeyAsync(text));
             Clipboard.Clear();
-            Toast?.Invoke("Ключ вставлен");
         }
         catch (KeyParseException ex)
         {
             Toast?.Invoke(ex.Message);
         }
+        finally
+        {
+            PasteKeyButton.IsEnabled = true;
+            PasteKeyButton.Content = "Вставить ключ или ссылку";
+        }
+        Refresh();
+    }
+
+    /// <summary>Удаление — в два нажатия, чтобы не стереть подписку случайно.</summary>
+    private void DeleteSubscription_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_confirmDeleteSubscription)
+        {
+            _confirmDeleteSubscription = true;
+            DeleteSubscriptionButton.Content = "Точно удалить?";
+            return;
+        }
+        _confirmDeleteSubscription = false;
+        _engine.DeleteSubscription();
+        Toast?.Invoke("Подписка удалена");
         Refresh();
     }
 
