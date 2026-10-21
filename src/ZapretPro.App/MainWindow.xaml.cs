@@ -41,7 +41,7 @@ public partial class MainWindow : Window
         _vpn = new VpnController(_keys, () => new Router(RouteLists.Load(listsDir)), new VpnManager());
         _vpn.Log += m => Dispatcher.BeginInvoke(() => AddLog(m));
 
-        _watchdog = new Watchdog(_zapret, _telegram, _vpn, new HealthChecker(), settings);
+        _watchdog = new Watchdog(_zapret, _telegram, _vpn, new HealthChecker(secret), settings);
         _watchdog.StatusChanged += s => Dispatcher.BeginInvoke(() => Show(s));
         _watchdog.Log += m => Dispatcher.BeginInvoke(() => AddLog(m));
 
@@ -253,6 +253,7 @@ public partial class MainWindow : Window
             VpnState.NoKey => "нет ключа",
             VpnState.BadKey => "ключ не подходит",
             VpnState.Stopped => "выключен",
+            VpnState.Connecting => "подключаюсь…",
             VpnState.Connected => $"подключён, маршрутов: {s.Vpn.RouteCount}"
                                   + (s.Vpn.Fallback.Count > 0 ? $", запасной канал: {string.Join(", ", s.Vpn.Fallback)}" : ""),
             VpnState.ServerNotResponding => "сервер не отвечает",

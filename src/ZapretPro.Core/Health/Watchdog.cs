@@ -62,6 +62,7 @@ public sealed class Watchdog
     private int _failures;
     private DateTimeOffset _lastSearch;
     private HealthReport? _lastReport;
+    private string _lastProblems = "";
     private string? _lastError;
 
     // Запасной режим: какие сервисы zapret сейчас отдал VPN, и с какого момента Telegram идёт через VPN
@@ -372,6 +373,15 @@ public sealed class Watchdog
         if (_vpn.HasKey)
             services.Add(Service.Ai);
         _lastReport = await _probe.CheckAsync(services, ct);
+
+        // Причины провалов пишем в журнал только когда они меняются, чтобы не засорять его каждые 2,5 минуты
+        var problems = string.Join("; ", _lastReport.Problems.OrderBy(p => p.Key).Select(p => $"{p.Key}: {p.Value}"));
+        if (problems != _lastProblems)
+        {
+            Write(problems.Length > 0 ? $"Не прошло: {problems}" : "Все проверки прошли");
+            _lastProblems = problems;
+        }
+
         Notify();
         return _lastReport;
     }

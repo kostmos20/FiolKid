@@ -271,7 +271,7 @@ public sealed class VpnTests : IDisposable
         var tunnel = new FakeTunnel();
         var time = new FakeTime();
         var dns = new FakeDns();
-        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, time);
+        var vpn = new VpnController(keys, () => new Router(Lists(), dns.Resolve, time), tunnel, time, handshakeWait: TimeSpan.Zero);
         return (vpn, tunnel, keys, time);
     }
 
@@ -360,11 +360,22 @@ public sealed class VpnTests : IDisposable
     [Fact]
     public async Task Controller_reports_silent_server_and_failed_start()
     {
-        var (vpn, tunnel, keys, _) = Controller();
+        var (vpn, tunnel, keys, time) = Controller();
         keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
 
+        // Сразу после запуска молчание сервера — это ещё «подключаюсь», а не поломка
         tunnel.Health = TunnelHealth.NoHandshake;
-        Assert.Equal(VpnState.ServerNotResponding, (await vpn.ApplyAsync(NoFallback, default)).State);
+        var connecting = await vpn.ApplyAsync(NoFallback, default);
+        Assert.Equal(VpnState.Connecting, connecting.State);
+        Assert.Null(connecting.Error);
+
+        time.Now += TimeSpan.FromMinutes(2);
+        var silent = await vpn.ApplyAsync(NoFallback, default);
+        Assert.Equal(VpnState.ServerNotResponding, silent.State);
+        Assert.Contains("одном устройстве", silent.Error);
+
+        tunnel.Health = TunnelHealth.Connected;
+        Assert.Equal(VpnState.Connected, (await vpn.ApplyAsync(NoFallback, default)).State);
 
         tunnel.Crash();
         tunnel.FailStart = true;

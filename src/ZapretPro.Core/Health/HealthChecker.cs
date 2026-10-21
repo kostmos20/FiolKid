@@ -21,6 +21,9 @@ public sealed record HealthReport(IReadOnlyDictionary<Service, bool> Services, b
     /// <summary>Страна, из которой нейросети видят запрос (код Cloudflare, например NL). Null — не проверяли или не ответили.</summary>
     public string? AiCountry { get; init; }
 
+    /// <summary>Почему не прошла проверка сервиса — для журнала и отчёта.</summary>
+    public IReadOnlyDictionary<Service, string> Problems { get; init; } = new Dictionary<Service, string>();
+
     public bool this[Service service] => Services.TryGetValue(service, out var ok) && ok;
 
     public int CountOk(IEnumerable<Service> services) => services.Count(s => this[s]);
@@ -35,10 +38,13 @@ public interface IHealthProbe
 /// Проверяет именно целевые сервисы, а не «есть ли интернет»: HTTPS-запрос,
 /// успех = прошло TLS-рукопожатие и пришли заголовки ответа (любой код).
 /// Каждый раз новые соединения: старое, установленное до блокировки, показало бы ложный успех.
+/// Не прошедшую проверку повторяем один раз: единичный сбой (например, в момент
+/// подключения VPN) не должен красить индикатор на всё время до следующей проверки.
 /// </summary>
 public sealed class HealthChecker : IHealthProbe
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(7);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
 
     private static readonly Dictionary<Service, string[]> Targets = new()
     {
@@ -47,13 +53,8 @@ public sealed class HealthChecker : IHealthProbe
         [Service.Discord] = ["https://discord.com/"],
     };
 
-    public static bool IsAiCountryOk(string? country) => country is not null && !AiBlockedCountries.Contains(country);
-
     // Сайт из списка исключений zapret, не заблокирован в России
     private const string ControlUrl = "https://ya.ru/";
-
-    // tg-ws-proxy ходит к Telegram через WebSocket на *.web.telegram.org: если он недоступен, прокси бесполезен
-    private const string TelegramUpstreamUrl = "https://web.telegram.org/";
 
     // Служебная страница Cloudflare: отвечает текстом с полем loc= — страной, из которой виден запрос
     private const string AiTraceUrl = "https://chatgpt.com/cdn-cgi/trace";
@@ -61,7 +62,41 @@ public sealed class HealthChecker : IHealthProbe
     // Страны, откуда ChatGPT и Claude не работают. Если видят оттуда — значит, запрос шёл мимо VPN.
     private static readonly HashSet<string> AiBlockedCountries = ["RU", "BY", "CN", "HK", "MO", "IR", "KP", "CU", "SY"];
 
+    // Основной дата-центр Telegram (в конфиге tg-ws-proxy он и DC4 указаны явно)
+    private const short TelegramDc = 2;
+
+    private readonly string? _telegramSecret;
+
+    /// <param name="telegramSecret">Секрет локального прокси: без него до Telegram через прокси не достучаться.</param>
+    public HealthChecker(string? telegramSecret = null)
+    {
+        _telegramSecret = telegramSecret;
+    }
+
+    public static bool IsAiCountryOk(string? country) => country is not null && !AiBlockedCountries.Contains(country);
+
     public async Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
+    {
+        var report = await CheckOnceAsync(services, ct);
+        var failed = services.Where(s => !report[s]).ToList();
+        if (failed.Count == 0 || !report.InternetOk)
+            return report;
+
+        await Task.Delay(RetryDelay, ct);
+        var retry = await CheckOnceAsync(failed, ct);
+        var merged = report.Services.ToDictionary(kv => kv.Key, kv => kv.Value || retry[kv.Key]);
+        var problems = report.Problems
+            .Where(p => !merged[p.Key])
+            .ToDictionary(p => p.Key, p => retry.Problems.GetValueOrDefault(p.Key, p.Value));
+        return report with
+        {
+            Services = merged,
+            Problems = problems,
+            AiCountry = retry.AiCountry ?? report.AiCountry,
+        };
+    }
+
+    private async Task<HealthReport> CheckOnceAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
     {
         using var handler = new SocketsHttpHandler
         {
@@ -73,47 +108,86 @@ public sealed class HealthChecker : IHealthProbe
         using var http = new HttpClient(handler) { Timeout = Timeout };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
-        var control = OpensAsync(http, ControlUrl, ct);
-        var ai = services.Contains(Service.Ai) ? AiCountryAsync(http, ct) : Task.FromResult<string?>(null);
-        var checks = services.ToDictionary(s => s, s => CheckServiceAsync(http, s, ai, ct));
+        var control = OpenAsync(http, ControlUrl, ct);
+        var checks = services.ToDictionary(s => s, s => CheckServiceAsync(http, s, ct));
 
-        await Task.WhenAll(checks.Values.Append(control));
-        return new HealthReport(checks.ToDictionary(c => c.Key, c => c.Value.Result), control.Result)
+        await Task.WhenAll(checks.Values.Cast<Task>().Append(control));
+        var problems = checks
+            .Where(c => c.Value.Result.Problem is not null)
+            .ToDictionary(c => c.Key, c => c.Value.Result.Problem!);
+        return new HealthReport(checks.ToDictionary(c => c.Key, c => c.Value.Result.Problem is null), control.Result is null)
         {
-            AiCountry = await ai,
+            AiCountry = checks.TryGetValue(Service.Ai, out var ai) ? ai.Result.Country : null,
+            Problems = problems,
         };
     }
 
-    private static async Task<bool> CheckServiceAsync(HttpClient http, Service service, Task<string?> aiCountry, CancellationToken ct)
+    private async Task<(string? Problem, string? Country)> CheckServiceAsync(HttpClient http, Service service, CancellationToken ct)
     {
         switch (service)
         {
             case Service.Telegram:
-                return await TelegramProxy.IsPortOpenAsync(ct) && await OpensAsync(http, TelegramUpstreamUrl, ct);
+                if (_telegramSecret is null)
+                    return (await TelegramProxy.IsPortOpenAsync(ct) ? null : "прокси не запущен", null);
+                return (await TelegramProbe.CheckAsync(TelegramProxy.Host, TelegramProxy.Port, _telegramSecret,
+                    TelegramDc, Timeout, ct), null);
+
             case Service.Ai:
-                return IsAiCountryOk(await aiCountry);
+                var (trace, problem) = await GetStringAsync(http, AiTraceUrl, ct);
+                var country = trace is null ? null : ParseTraceCountry(trace);
+                if (problem is not null)
+                    return ($"chatgpt.com: {problem}", null);
+                return IsAiCountryOk(country)
+                    ? (null, country)
+                    : ($"ChatGPT видит запрос из страны {country ?? "?"} — значит, мимо VPN", country);
         }
 
         if (!Targets.TryGetValue(service, out var urls))
-            return false;
+            return ("неизвестный сервис", null);
 
-        var results = await Task.WhenAll(urls.Select(u => OpensAsync(http, u, ct)));
-        return results.All(ok => ok);
+        var results = await Task.WhenAll(urls.Select(async u => (Url: u, Problem: await OpenAsync(http, u, ct))));
+        var failed = results.Where(r => r.Problem is not null).ToList();
+        return (failed.Count == 0 ? null : string.Join("; ", failed.Select(f => $"{new Uri(f.Url).Host}: {f.Problem}")), null);
     }
 
-    private static async Task<string?> AiCountryAsync(HttpClient http, CancellationToken ct)
+    /// <summary>Null — открылся, иначе — коротко, что пошло не так.</summary>
+    private static async Task<string?> OpenAsync(HttpClient http, string url, CancellationToken ct)
     {
         try
         {
-            var text = await http.GetStringAsync(AiTraceUrl, ct);
-            return ParseTraceCountry(text);
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or SocketException or IOException
-                                  && !ct.IsCancellationRequested)
-        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url) { Version = HttpVersion.Version11 };
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             return null;
         }
+        catch (Exception e) when (IsNetworkError(e, ct))
+        {
+            return Describe(e);
+        }
     }
+
+    private static async Task<(string? Text, string? Problem)> GetStringAsync(HttpClient http, string url, CancellationToken ct)
+    {
+        try
+        {
+            return (await http.GetStringAsync(url, ct), null);
+        }
+        catch (Exception e) when (IsNetworkError(e, ct))
+        {
+            return (null, Describe(e));
+        }
+    }
+
+    private static bool IsNetworkError(Exception e, CancellationToken ct) =>
+        e is HttpRequestException or TaskCanceledException or SocketException or IOException && !ct.IsCancellationRequested;
+
+    private static string Describe(Exception e) => e switch
+    {
+        TaskCanceledException => $"нет ответа за {Timeout.TotalSeconds:0} с",
+        HttpRequestException { InnerException: SocketException s } => $"не соединиться ({s.SocketErrorCode})",
+        HttpRequestException { InnerException: System.Security.Authentication.AuthenticationException } => "сбой TLS (похоже на блокировку)",
+        HttpRequestException { InnerException: IOException } => "соединение оборвалось (похоже на блокировку)",
+        _ => e.GetType().Name,
+    };
 
     internal static string? ParseTraceCountry(string trace) => trace
         .Split('\n')
@@ -121,19 +195,4 @@ public sealed class HealthChecker : IHealthProbe
         .Where(l => l.StartsWith("loc=", StringComparison.Ordinal))
         .Select(l => l[4..].ToUpperInvariant())
         .FirstOrDefault(c => c.Length == 2);
-
-    private static async Task<bool> OpensAsync(HttpClient http, string url, CancellationToken ct)
-    {
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url) { Version = HttpVersion.Version11 };
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            return true;
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or SocketException or IOException
-                                  && !ct.IsCancellationRequested)
-        {
-            return false;
-        }
-    }
 }

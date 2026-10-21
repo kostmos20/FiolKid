@@ -115,16 +115,23 @@ public sealed class VpnManager : IVpnTunnel
         // Вывод: «<публичный ключ сервера>\t<unix-время последнего рукопожатия>»
         var (code, output) = await RunAsync(Awg, $"show {TunnelName} latest-handshakes", ct);
         if (code != 0)
+        {
+            LastError = $"awg show не сработал (код {code}): {output}";
             return TunnelHealth.NoHandshake;
+        }
 
         var last = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(l => l.Split('\t', ' ').LastOrDefault())
             .Select(t => long.TryParse(t, out var s) ? s : 0)
             .DefaultIfEmpty(0)
             .Max();
-        return last > 0 && DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(last) < HandshakeFresh
-            ? TunnelHealth.Connected
-            : TunnelHealth.NoHandshake;
+        if (last > 0 && DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(last) < HandshakeFresh)
+            return TunnelHealth.Connected;
+
+        LastError = last == 0
+            ? "рукопожатия с сервером ещё не было"
+            : $"последнее рукопожатие {(DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(last)).TotalMinutes:0} мин назад";
+        return TunnelHealth.NoHandshake;
     }
 
     private async Task UninstallAsync(CancellationToken ct)

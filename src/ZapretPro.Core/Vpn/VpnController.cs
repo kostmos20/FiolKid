@@ -9,6 +9,8 @@ public enum VpnState
     /// <summary>Ключ есть, но не подходит (не AmneziaWG или повреждён).</summary>
     BadKey,
     Stopped,
+    /// <summary>Туннель только что поднят, ждём первого ответа сервера.</summary>
+    Connecting,
     Connected,
     /// <summary>Туннель поднят, но сервер не отвечает.</summary>
     ServerNotResponding,
@@ -40,6 +42,16 @@ public sealed class VpnController : IVpn
     // Как часто заново узнавать IP доменов через DNS
     private static readonly TimeSpan ResolveInterval = TimeSpan.FromMinutes(10);
 
+    // Сколько ждать первого рукопожатия сразу после запуска туннеля, и сколько после запуска
+    // считать молчание сервера нормальным «подключаюсь», а не «сервер не отвечает»
+    private static readonly TimeSpan HandshakeWait = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ConnectingGrace = TimeSpan.FromMinutes(1);
+
+    private const string SilentServerMessage =
+        "VPN-сервер не отвечает. Если этот же ключ сейчас включён где-то ещё (Amnezia VPN, телефон, другой компьютер) — " +
+        "выключи его там: один ключ работает только на одном устройстве одновременно. " +
+        "Если нигде больше не включён — возможно, знакомый выключил сервер или сменил ключ.";
+
     private readonly KeyStore _keys;
     private readonly Func<Router> _routerFactory;
     private readonly IVpnTunnel _tunnel;
@@ -53,13 +65,17 @@ public sealed class VpnController : IVpn
     private DateTimeOffset _resolvedAt;
     private RoutePlan? _plan;
     private string? _runningConf;
+    private DateTimeOffset _startedAt;
+    private readonly TimeSpan _handshakeWait;
 
-    public VpnController(KeyStore keys, Func<Router> routerFactory, IVpnTunnel tunnel, TimeProvider? time = null)
+    public VpnController(KeyStore keys, Func<Router> routerFactory, IVpnTunnel tunnel, TimeProvider? time = null,
+        TimeSpan? handshakeWait = null)
     {
         _keys = keys;
         _routerFactory = routerFactory;
         _tunnel = tunnel;
         _time = time ?? TimeProvider.System;
+        _handshakeWait = handshakeWait ?? HandshakeWait;
     }
 
     public bool HasKey => _keys.HasKey;
@@ -112,12 +128,31 @@ public sealed class VpnController : IVpn
                 return Status = new VpnStatus(VpnState.Failed, 0, fallback, _tunnel.LastError);
             }
             _runningConf = conf;
-            health = await _tunnel.GetHealthAsync(ct);
+            _startedAt = _time.GetUtcNow();
+            health = await WaitForHandshakeAsync(ct);
         }
 
-        var state = health == TunnelHealth.Connected ? VpnState.Connected : VpnState.ServerNotResponding;
-        return Status = new VpnStatus(state, _plan.AllowedIps.Count, fallback,
-            state == VpnState.Connected ? null : "VPN-сервер не отвечает: возможно, знакомый выключил сервер или сменил ключ.");
+        if (health == TunnelHealth.Connected)
+            return Status = new VpnStatus(VpnState.Connected, _plan.AllowedIps.Count, fallback, null);
+
+        if (_time.GetUtcNow() - _startedAt < ConnectingGrace)
+            return Status = new VpnStatus(VpnState.Connecting, _plan.AllowedIps.Count, fallback, null);
+
+        Log?.Invoke($"VPN: {_tunnel.LastError}");
+        return Status = new VpnStatus(VpnState.ServerNotResponding, _plan.AllowedIps.Count, fallback, SilentServerMessage);
+    }
+
+    /// <summary>Первое рукопожатие происходит через секунду-другую после запуска службы — ждём его, а не проверяем сразу.</summary>
+    private async Task<TunnelHealth> WaitForHandshakeAsync(CancellationToken ct)
+    {
+        var deadline = _time.GetUtcNow() + _handshakeWait;
+        while (true)
+        {
+            var health = await _tunnel.GetHealthAsync(ct);
+            if (health != TunnelHealth.NoHandshake || _time.GetUtcNow() >= deadline)
+                return health;
+            await Task.Delay(TimeSpan.FromSeconds(1), _time, ct);
+        }
     }
 
     public async Task StopAsync(CancellationToken ct)
