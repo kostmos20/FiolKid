@@ -36,8 +36,6 @@ foreach ($list in 'ipset-all.txt', 'ipset-exclude.txt', 'list-exclude.txt', 'lis
     Copy-Item (Join-Path $third "zapret\lists\$list") (Join-Path $zapret 'lists')
 }
 Copy-Item (Join-Path $root 'data\strategies.json') $zapret
-# Наш список дополнительных доменов (вместо заглушки, которую иначе создаёт ZapretManager)
-Copy-Item (Join-Path $root 'data\zapret\list-general-user.txt') (Join-Path $zapret 'lists')
 
 # Прокси для Telegram
 $tg = Join-Path $stage 'tg-ws-proxy'
