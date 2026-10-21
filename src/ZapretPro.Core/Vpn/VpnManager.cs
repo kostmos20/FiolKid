@@ -31,7 +31,10 @@ public interface IVpnTunnel
 public sealed class VpnManager : IVpnTunnel
 {
     public const string TunnelName = "FiolKid";
-    private const string ServiceName = "AmneziaWGTunnel$" + TunnelName;
+
+    // Прежние имена программы. Туннель со старым именем мог остаться службой Windows с тем же ключом:
+    // он занимает тот же адрес, и новый туннель не поднимается («The object already exists»).
+    private static readonly string[] LegacyTunnelNames = ["OdnaKnopka"];
 
     // Без трафика клиент шлёт keepalive раз в 25 с, рукопожатие обновляется раз в 2 минуты
     private static readonly TimeSpan HandshakeFresh = TimeSpan.FromMinutes(3);
@@ -66,7 +69,8 @@ public sealed class VpnManager : IVpnTunnel
             return false;
         }
 
-        await UninstallAsync(ct);
+        await RemoveLegacyTunnelsAsync(ct);
+        await UninstallAsync(TunnelName, ct);
 
         WriteProtected(conf);
         var (code, output) = await RunAsync(AmneziaWg, $"/installtunnelservice \"{ConfPath}\"", ct);
@@ -96,7 +100,7 @@ public sealed class VpnManager : IVpnTunnel
 
     public async Task StopAsync(CancellationToken ct)
     {
-        await UninstallAsync(ct);
+        await UninstallAsync(TunnelName, ct);
         try
         {
             File.Delete(ConfPath);
@@ -134,22 +138,41 @@ public sealed class VpnManager : IVpnTunnel
         return TunnelHealth.NoHandshake;
     }
 
-    private async Task UninstallAsync(CancellationToken ct)
+    private async Task UninstallAsync(string tunnel, CancellationToken ct)
     {
-        if (QueryService() is null || !File.Exists(AmneziaWg))
+        if (QueryService(tunnel) is null || !File.Exists(AmneziaWg))
             return;
-        await RunAsync(AmneziaWg, $"/uninstalltunnelservice {TunnelName}", ct);
+        await RunAsync(AmneziaWg, $"/uninstalltunnelservice {tunnel}", ct);
 
         // Служба удаляется асинхронно; новая с тем же именем не встанет, пока старая не исчезнет
-        for (var i = 0; i < 20 && QueryService() is not null; i++)
+        for (var i = 0; i < 20 && QueryService(tunnel) is not null; i++)
             await Task.Delay(250, ct);
     }
 
-    private static ServiceControllerStatus? QueryService()
+    /// <summary>Убирает туннели прежних версий программы и их конфиги (в них приватный ключ).</summary>
+    private async Task RemoveLegacyTunnelsAsync(CancellationToken ct)
+    {
+        foreach (var name in LegacyTunnelNames)
+        {
+            await UninstallAsync(name, ct);
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), name, "vpn");
+            try
+            {
+                if (Directory.Exists(dir))
+                    Directory.Delete(dir, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Попробуем при следующем запуске
+            }
+        }
+    }
+
+    private static ServiceControllerStatus? QueryService(string tunnel = TunnelName)
     {
         try
         {
-            using var service = new ServiceController(ServiceName);
+            using var service = new ServiceController("AmneziaWGTunnel$" + tunnel);
             return service.Status;
         }
         catch (InvalidOperationException)
