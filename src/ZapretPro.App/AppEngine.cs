@@ -258,6 +258,30 @@ public sealed class AppEngine
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Отчёт плюс проверка сайтов так, как их открывает браузер (IPv6, адреса из DNS, маршруты VPN).
+    /// Занимает несколько секунд.
+    /// </summary>
+    public async Task<string> BuildFullReportAsync()
+    {
+        var report = BuildReport();
+        if (!IsOn || !Keys.HasKey)
+            return report;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+            var sites = await SiteProbe.RunAsync(_vpn.CurrentRoutes, cts.Token);
+            var marker = "--- журнал ---";
+            var at = report.IndexOf(marker, StringComparison.Ordinal);
+            var block = $"--- сайты через VPN ---{Environment.NewLine}{sites}{Environment.NewLine}";
+            return at < 0 ? report + block : report.Insert(at, block);
+        }
+        catch (OperationCanceledException)
+        {
+            return report + "--- сайты через VPN ---" + Environment.NewLine + "проверка не успела за 40 с" + Environment.NewLine;
+        }
+    }
+
     /// <summary>Версии того, что внутри, — для раздела «Обновления».</summary>
     public IReadOnlyList<(string Name, string Version)> ComponentVersions()
     {

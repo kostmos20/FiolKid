@@ -11,7 +11,7 @@
     <AssemblyName>FiolKid</AssemblyName>
     <RootNamespace>ZapretPro.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.5.1</Version>
+    <Version>0.5.2</Version>
     <Product>FiolKid</Product>
   </PropertyGroup>
 

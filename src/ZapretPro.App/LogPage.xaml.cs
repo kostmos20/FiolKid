@@ -58,16 +58,25 @@ public partial class LogPage : UserControl
         DetailsText.Text = sb.ToString().TrimEnd();
     }
 
-    private void Copy_Click(object sender, RoutedEventArgs e)
+    private async void Copy_Click(object sender, RoutedEventArgs e)
     {
+        var button = (Button)sender;
+        button.IsEnabled = false;
+        button.Content = "Собираю отчёт…";
         try
         {
-            Clipboard.SetText(_engine.BuildReport());
+            var report = await _engine.BuildFullReportAsync();
+            Clipboard.SetText(report);
             Toast?.Invoke("Отчёт скопирован — вставь его в сообщение (Ctrl+V)");
         }
         catch (System.Runtime.InteropServices.COMException)
         {
             Toast?.Invoke("Не получилось скопировать — попробуй ещё раз");
+        }
+        finally
+        {
+            button.Content = "Скопировать отчёт";
+            button.IsEnabled = true;
         }
     }
 

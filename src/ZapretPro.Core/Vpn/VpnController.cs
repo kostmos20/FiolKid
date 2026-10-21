@@ -96,6 +96,9 @@ public sealed class VpnController : IVpn
 
     public bool HasKey => _keys.HasKey;
 
+    /// <summary>Маршруты, с которыми сейчас поднят туннель (пусто, если не поднят) — для разбора проблем.</summary>
+    public IReadOnlyList<string> CurrentRoutes => _runningConf is null || _plan is null ? [] : _plan.AllowedIps;
+
     public VpnStatus Status { get; private set; } = VpnStatus.Initial;
 
     public event Action<string>? Log;
