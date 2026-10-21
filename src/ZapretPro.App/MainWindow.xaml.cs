@@ -76,6 +76,7 @@ public partial class MainWindow : Window
         (Headline.Text, Subline.Text) = (on, state) switch
         {
             (false, _) => ("Выключено", "Нажми на кнопку, чтобы включить"),
+            _ when _engine.Status.NeedsReboot => ("Перезагрузи компьютер", "Драйвер обхода блокировок завис — после перезагрузки всё заработает"),
             (true, ZapretState.Searching) => ("Подбираю лучший способ…", "Это может занять пару минут"),
             (true, ZapretState.NoInternet) => ("Нет интернета", "Проверь, подключён ли компьютер к интернету"),
             _ when checking => ("Проверяю…", "Сейчас всё проверю"),

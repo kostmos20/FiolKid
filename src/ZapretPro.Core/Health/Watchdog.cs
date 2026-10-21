@@ -28,7 +28,11 @@ public sealed record WatchdogStatus(
     bool TelegramRunning,
     IReadOnlySet<Service> ViaVpn,
     VpnStatus Vpn,
-    string? LastError);
+    string? LastError)
+{
+    /// <summary>Драйвер zapret завис — поможет только перезагрузка. Об этом надо сказать человеку прямо.</summary>
+    public bool NeedsReboot { get; init; }
+}
 
 public sealed record WatchdogOptions
 {
@@ -64,6 +68,7 @@ public sealed class Watchdog
     private HealthReport? _lastReport;
     private string _lastProblems = "";
     private string? _lastError;
+    private bool _needsReboot;
 
     // Запасной режим: какие сервисы zapret сейчас отдал VPN, и с какого момента Telegram идёт через VPN
     private readonly HashSet<Service> _zapretFallback = [];
@@ -97,7 +102,7 @@ public sealed class Watchdog
         _telegram.IsRunning,
         ViaVpn(),
         _vpnStatus,
-        _lastError);
+        _lastError) { NeedsReboot = _needsReboot };
 
     /// <summary>Запуск и бесконечный цикл проверок до отмены.</summary>
     public async Task RunAsync(CancellationToken ct)
@@ -283,6 +288,7 @@ public sealed class Watchdog
             if (missing.Count == 0)
             {
                 _lastError = null;
+                _needsReboot = false;
                 Remember(index);
                 SetState(ZapretState.Working);
                 await ApplyVpnAsync(ct);
@@ -292,6 +298,10 @@ public sealed class Watchdog
             if (ok > best.Ok)
                 best = (ok, index, missing);
         }
+
+        _needsReboot = driverBroken;
+        if (driverBroken)
+            Write("Нужна перезагрузка компьютера: драйвер zapret завис");
 
         if (best.Index >= 0 && await _zapret.StartAsync(strategies[best.Index], ct))
         {

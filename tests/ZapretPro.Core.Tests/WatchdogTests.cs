@@ -292,6 +292,7 @@ public sealed class WatchdogTests : IDisposable
         Assert.Single(_zapret.Started);                 // а не все стратегии подряд
         Assert.Equal(ZapretState.Failed, State);
         Assert.Contains("Перезагрузи компьютер", _watchdog.Status.LastError);
+        Assert.True(_watchdog.Status.NeedsReboot);
         Assert.Equal(new HashSet<RouteSet> { RouteSet.YouTube, RouteSet.Discord }, _vpn.Routes); // запасной канал всё равно включён
     }
 

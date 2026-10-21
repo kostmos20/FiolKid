@@ -18,6 +18,7 @@ public sealed class TrayIcon : IDisposable
     private readonly Dictionary<AppEngine.Overall, Icon> _icons = new();
     private readonly System.Windows.Threading.DispatcherTimer _timer;
     private bool _hintShown;
+    private bool _rebootNotified;
     private DateTime? _problemSince;
     private bool _problemNotified;
 
@@ -77,6 +78,17 @@ public sealed class TrayIcon : IDisposable
             _ => "FiolKid — не всё работает",
         };
         _toggle.Text = _engine.IsOn ? "Выключить" : "Включить";
+
+        // Драйвер zapret завис — ждать пять минут бессмысленно, само не пройдёт: говорим сразу
+        var needsReboot = _engine.IsOn && _engine.Status.NeedsReboot;
+        if (needsReboot && !_rebootNotified)
+        {
+            _rebootNotified = true;
+            _icon.ShowBalloonTip(15000, "Перезагрузи компьютер",
+                "Драйвер обхода блокировок завис. После перезагрузки YouTube и Discord заработают.", Forms.ToolTipIcon.Warning);
+        }
+        else if (!needsReboot)
+            _rebootNotified = false;
 
         if (state != AppEngine.Overall.Problem)
         {
