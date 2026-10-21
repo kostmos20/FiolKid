@@ -1,9 +1,219 @@
+using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.ServiceProcess;
+using ZapretPro.Core.Infrastructure;
+
 namespace ZapretPro.Core.Vpn;
 
-/// <summary>
-/// Поднимает и опускает VPN-туннель через выбранное ядро.
-/// </summary>
-/// <remarks>Реализация — этап 3 (см. PLAN.md).</remarks>
-public sealed class VpnManager
+public enum TunnelHealth
 {
+    Stopped,
+    /// <summary>Служба работает, но сервер не отвечает (нет свежего рукопожатия).</summary>
+    NoHandshake,
+    Connected,
+}
+
+public interface IVpnTunnel
+{
+    string? LastError { get; }
+    Task<bool> StartAsync(string conf, CancellationToken ct);
+    Task StopAsync(CancellationToken ct);
+    Task<TunnelHealth> GetHealthAsync(CancellationToken ct);
+}
+
+/// <summary>
+/// Туннель AmneziaWG через официальный amneziawg.exe (amnezia-vpn/amneziawg-windows-client):
+/// /installtunnelservice ставит службу AmneziaWGTunnel$OdnaKnopka, своего окна и иконки у неё нет.
+/// Конфиг с приватным ключом лежит в папке, доступной только SYSTEM и администраторам,
+/// и удаляется при остановке.
+/// </summary>
+public sealed class VpnManager : IVpnTunnel
+{
+    public const string TunnelName = "OdnaKnopka";
+    private const string ServiceName = "AmneziaWGTunnel$" + TunnelName;
+
+    // Без трафика клиент шлёт keepalive раз в 25 с, рукопожатие обновляется раз в 2 минуты
+    private static readonly TimeSpan HandshakeFresh = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
+
+    private readonly string _awgDir;
+    private readonly string _confDir;
+
+    public VpnManager() : this(Path.Combine(AppPaths.InstallDir, "amneziawg"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "OdnaKnopka", "vpn"))
+    {
+    }
+
+    public VpnManager(string awgDir, string confDir)
+    {
+        _awgDir = awgDir;
+        _confDir = confDir;
+    }
+
+    public string? LastError { get; private set; }
+
+    private string ConfPath => Path.Combine(_confDir, TunnelName + ".conf");
+    private string AmneziaWg => Path.Combine(_awgDir, "amneziawg.exe");
+    private string Awg => Path.Combine(_awgDir, "awg.exe");
+
+    public async Task<bool> StartAsync(string conf, CancellationToken ct)
+    {
+        LastError = null;
+        if (!File.Exists(AmneziaWg))
+        {
+            LastError = $"Не найден {AmneziaWg}. Возможно, его удалил антивирус.";
+            return false;
+        }
+
+        await UninstallAsync(ct);
+
+        WriteProtected(conf);
+        var (code, output) = await RunAsync(AmneziaWg, $"/installtunnelservice \"{ConfPath}\"", ct);
+        if (code != 0)
+        {
+            LastError = $"Не удалось поставить службу VPN (код {code}): {output}";
+            return false;
+        }
+
+        var deadline = DateTime.UtcNow + StartupTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            switch (QueryService())
+            {
+                case ServiceControllerStatus.Running:
+                    return true;
+                case ServiceControllerStatus.Stopped:
+                    LastError = $"Служба VPN остановилась сразу после запуска: {await TunnelLogAsync(ct)}";
+                    return false;
+            }
+            await Task.Delay(500, ct);
+        }
+
+        LastError = $"Служба VPN не запустилась за {StartupTimeout.TotalSeconds:0} с: {await TunnelLogAsync(ct)}";
+        return false;
+    }
+
+    public async Task StopAsync(CancellationToken ct)
+    {
+        await UninstallAsync(ct);
+        try
+        {
+            File.Delete(ConfPath);
+        }
+        catch (IOException)
+        {
+            // Удалим при следующем запуске
+        }
+    }
+
+    public async Task<TunnelHealth> GetHealthAsync(CancellationToken ct)
+    {
+        if (QueryService() != ServiceControllerStatus.Running)
+            return TunnelHealth.Stopped;
+
+        // Вывод: «<публичный ключ сервера>\t<unix-время последнего рукопожатия>»
+        var (code, output) = await RunAsync(Awg, $"show {TunnelName} latest-handshakes", ct);
+        if (code != 0)
+            return TunnelHealth.NoHandshake;
+
+        var last = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Split('\t', ' ').LastOrDefault())
+            .Select(t => long.TryParse(t, out var s) ? s : 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        return last > 0 && DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(last) < HandshakeFresh
+            ? TunnelHealth.Connected
+            : TunnelHealth.NoHandshake;
+    }
+
+    private async Task UninstallAsync(CancellationToken ct)
+    {
+        if (QueryService() is null || !File.Exists(AmneziaWg))
+            return;
+        await RunAsync(AmneziaWg, $"/uninstalltunnelservice {TunnelName}", ct);
+
+        // Служба удаляется асинхронно; новая с тем же именем не встанет, пока старая не исчезнет
+        for (var i = 0; i < 20 && QueryService() is not null; i++)
+            await Task.Delay(250, ct);
+    }
+
+    private static ServiceControllerStatus? QueryService()
+    {
+        try
+        {
+            using var service = new ServiceController(ServiceName);
+            return service.Status;
+        }
+        catch (InvalidOperationException)
+        {
+            return null; // службы нет
+        }
+    }
+
+    /// <summary>Папка с конфигом: доступ только у SYSTEM и администраторов, наследование прав отключено.</summary>
+    private void WriteProtected(string conf)
+    {
+        var dir = Directory.CreateDirectory(_confDir);
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (var sid in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(sid, null),
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+        }
+        dir.SetAccessControl(security);
+        File.WriteAllText(ConfPath, conf);
+    }
+
+    /// <summary>Последние строки журнала AmneziaWG про наш туннель — для отчёта.</summary>
+    private async Task<string> TunnelLogAsync(CancellationToken ct)
+    {
+        var (_, output) = await RunAsync(AmneziaWg, "/dumplog", ct);
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Contains(TunnelName, StringComparison.OrdinalIgnoreCase))
+            .TakeLast(3);
+        return string.Join(" | ", lines);
+    }
+
+    private static async Task<(int Code, string Output)> RunAsync(string exe, string args, CancellationToken ct)
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo(exe, args)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            },
+        };
+        try
+        {
+            process.Start();
+        }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            return (-1, e.Message);
+        }
+
+        var stdout = process.StandardOutput.ReadToEndAsync(ct);
+        var stderr = process.StandardError.ReadToEndAsync(ct);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            ChildProcesses.KillTree(process);
+            return (-1, "нет ответа за 30 с");
+        }
+        return (process.ExitCode, ((await stdout) + (await stderr)).Trim());
+    }
 }

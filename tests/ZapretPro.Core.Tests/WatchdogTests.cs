@@ -1,5 +1,6 @@
 using ZapretPro.Core.Health;
 using ZapretPro.Core.Infrastructure;
+using ZapretPro.Core.Vpn;
 using ZapretPro.Core.Zapret;
 
 namespace ZapretPro.Core.Tests;
@@ -9,6 +10,7 @@ public sealed class WatchdogTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "OdnaKnopkaTests", Guid.NewGuid().ToString("N"));
     private readonly FakeZapret _zapret = new("general", "ALT", "ALT2", "ALT3");
     private readonly FakeTelegram _telegram = new();
+    private readonly FakeVpn _vpn = new();
     private readonly FakeTime _time = new();
     private readonly FakeProbe _probe;
     private readonly SettingsStore _settings;
@@ -16,9 +18,9 @@ public sealed class WatchdogTests : IDisposable
 
     public WatchdogTests()
     {
-        _probe = new FakeProbe(_zapret, _telegram);
+        _probe = new FakeProbe(_zapret, _telegram, _vpn);
         _settings = new SettingsStore(Path.Combine(_dir, "settings.json"));
-        _watchdog = new Watchdog(_zapret, _telegram, _probe, _settings,
+        _watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
             new WatchdogOptions { WarmUp = TimeSpan.Zero }, _time);
     }
 
@@ -286,12 +288,104 @@ public sealed class WatchdogTests : IDisposable
         _zapret.Works("general");
         await _watchdog.StartAsync(default);
 
-        _watchdog.Stop();
+        await _watchdog.StopAsync(default);
 
         Assert.False(_zapret.IsRunning);
         Assert.False(_telegram.IsRunning);
+        Assert.True(_vpn.Stopped);
+        Assert.True(_zapret.DriverUnloaded);
         Assert.Equal(ZapretState.Stopped, State);
         Assert.Null(_watchdog.Status.StrategyId);
+    }
+
+    [Fact]
+    public async Task Working_zapret_keeps_only_ai_in_vpn()
+    {
+        _zapret.Works("general");
+
+        await _watchdog.StartAsync(default);
+
+        Assert.Empty(_vpn.Routes);
+        Assert.Equal([Service.Ai], _watchdog.Status.ViaVpn);
+        Assert.True(_watchdog.Status.LastReport![Service.Ai]);
+    }
+
+    [Fact]
+    public async Task When_zapret_fails_youtube_and_discord_go_through_vpn()
+    {
+        await _watchdog.StartAsync(default);
+
+        Assert.Equal(ZapretState.Failed, State);
+        Assert.Equal(new HashSet<RouteSet> { RouteSet.YouTube, RouteSet.Discord }, _vpn.Routes);
+        Assert.Contains(Service.YouTube, _watchdog.Status.ViaVpn);
+        Assert.True(_watchdog.Status.LastReport![Service.YouTube]);
+        Assert.True(_watchdog.Status.LastReport[Service.Discord]);
+    }
+
+    [Fact]
+    public async Task Partial_mode_sends_only_the_missing_service_through_vpn()
+    {
+        _zapret.Works("ALT", discord: false);
+
+        await _watchdog.StartAsync(default);
+
+        Assert.Equal(ZapretState.Partial, State);
+        Assert.Equal(new HashSet<RouteSet> { RouteSet.Discord }, _vpn.Routes);
+    }
+
+    [Fact]
+    public async Task Hourly_retry_does_not_mistake_vpn_for_a_working_strategy()
+    {
+        await _watchdog.StartAsync(default);
+        _vpn.Applied.Clear();
+
+        _time.Advance(TimeSpan.FromHours(1));
+        await _watchdog.CheckAsync(default);
+
+        // Перед перебором запасной канал для YouTube и Discord сняли, поэтому ни одна стратегия не «сработала»
+        Assert.Empty(_vpn.Applied[0]);
+        Assert.Equal(ZapretState.Failed, State);
+        Assert.Null(_settings.Load().LastStrategyId);
+        Assert.Equal(new HashSet<RouteSet> { RouteSet.YouTube, RouteSet.Discord }, _vpn.Routes);
+    }
+
+    [Fact]
+    public async Task Telegram_goes_through_vpn_after_two_failures_and_retries_after_an_hour()
+    {
+        _zapret.Works("general");
+        await _watchdog.StartAsync(default);
+
+        _probe.TelegramUpstream = false;
+        await _watchdog.CheckAsync(default);
+        Assert.DoesNotContain(RouteSet.Telegram, _vpn.Routes);
+
+        await _watchdog.CheckAsync(default);
+        Assert.Contains(RouteSet.Telegram, _vpn.Routes);
+        Assert.Contains(Service.Telegram, _watchdog.Status.ViaVpn);
+
+        // Через VPN Telegram работает — пока не прошёл час, запасной канал не снимаем
+        await _watchdog.CheckAsync(default);
+        Assert.Contains(RouteSet.Telegram, _vpn.Routes);
+
+        _probe.TelegramUpstream = true;
+        _time.Advance(TimeSpan.FromHours(1));
+        await _watchdog.CheckAsync(default);
+        Assert.DoesNotContain(RouteSet.Telegram, _vpn.Routes);
+
+        await _watchdog.CheckAsync(default);
+        Assert.DoesNotContain(RouteSet.Telegram, _vpn.Routes);
+    }
+
+    [Fact]
+    public async Task Without_key_ai_is_not_checked()
+    {
+        _vpn.HasKey = false;
+        _zapret.Works("general");
+
+        await _watchdog.StartAsync(default);
+
+        Assert.All(_probe.Requested, r => Assert.DoesNotContain(Service.Ai, r));
+        Assert.Equal(VpnState.NoKey, _watchdog.Status.Vpn.State);
     }
 
     private sealed class FakeZapret : IZapretRunner
@@ -339,6 +433,10 @@ public sealed class WatchdogTests : IDisposable
             IsRunning = false;
             Current = null;
         }
+
+        public bool DriverUnloaded { get; private set; }
+
+        public void UnloadDriver() => DriverUnloaded = true;
     }
 
     private sealed class FakeTelegram : ITelegramProxy
@@ -358,25 +456,62 @@ public sealed class WatchdogTests : IDisposable
         public void Crash() => IsRunning = false;
     }
 
-    private sealed class FakeProbe(FakeZapret zapret, FakeTelegram telegram) : IHealthProbe
+    private sealed class FakeVpn : IVpn
+    {
+        public bool HasKey { get; set; } = true;
+        public VpnStatus Status { get; private set; } = VpnStatus.Initial;
+        public IReadOnlySet<RouteSet> Routes { get; private set; } = new HashSet<RouteSet>();
+        public List<IReadOnlySet<RouteSet>> Applied { get; } = [];
+        public bool Stopped { get; private set; }
+
+        public bool Carries(RouteSet set) => HasKey && !Stopped && Routes.Contains(set);
+
+        public Task<VpnStatus> ApplyAsync(IReadOnlySet<RouteSet> fallback, CancellationToken ct)
+        {
+            Stopped = false;
+            Routes = new HashSet<RouteSet>(fallback);
+            Applied.Add(Routes);
+            Status = new VpnStatus(HasKey ? VpnState.Connected : VpnState.NoKey, 1, fallback, null);
+            return Task.FromResult(Status);
+        }
+
+        public Task StopAsync(CancellationToken ct)
+        {
+            Stopped = true;
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Ведёт себя как настоящая проверка: сервис открывается, если его пробивает текущая стратегия
+    /// или если он идёт через VPN.
+    /// </summary>
+    private sealed class FakeProbe(FakeZapret zapret, FakeTelegram telegram, FakeVpn vpn) : IHealthProbe
     {
         public bool Internet { get; set; } = true;
+
+        /// <summary>Доходит ли прокси Telegram до серверов Telegram напрямую.</summary>
+        public bool TelegramUpstream { get; set; } = true;
 
         /// <summary>Сколько следующих проверок провалить вне зависимости от стратегии.</summary>
         public int FailNext { get; set; }
 
+        public List<IReadOnlyCollection<Service>> Requested { get; } = [];
+
         public Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
         {
+            Requested.Add(services);
             var effect = zapret.Effect;
             var fail = FailNext > 0;
             if (fail)
                 FailNext--;
 
-            var results = services.ToDictionary(s => s, s => s switch
+            var results = services.ToDictionary(s => s, s => Internet && s switch
             {
-                Service.YouTube => Internet && !fail && effect.YouTube,
-                Service.Discord => Internet && !fail && effect.Discord,
-                Service.Telegram => telegram.IsRunning,
+                Service.YouTube => !fail && effect.YouTube || vpn.Carries(RouteSet.YouTube),
+                Service.Discord => !fail && effect.Discord || vpn.Carries(RouteSet.Discord),
+                Service.Telegram => telegram.IsRunning && (TelegramUpstream || vpn.Carries(RouteSet.Telegram)),
+                Service.Ai => vpn.HasKey && !vpn.Stopped,
                 _ => false,
             });
             return Task.FromResult(new HealthReport(results, Internet));

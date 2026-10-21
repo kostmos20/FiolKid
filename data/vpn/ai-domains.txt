@@ -1,0 +1,39 @@
+# Нейросети: всегда через VPN.
+# Программа регулярно узнаёт IP этих доменов через DNS и пускает в туннель только их.
+# Можно дописывать свои домены (по одному в строке) или подсети вида 1.2.3.0/24 — пересборка не нужна.
+# Поддомены автоматически не учитываются: нужный поддомен пишется отдельной строкой.
+
+# ChatGPT / OpenAI
+chatgpt.com
+www.chatgpt.com
+ab.chatgpt.com
+ws.chatgpt.com
+cdn.oaistatic.com
+oaistatic.com
+oaiusercontent.com
+files.oaiusercontent.com
+openai.com
+www.openai.com
+api.openai.com
+auth.openai.com
+auth0.openai.com
+platform.openai.com
+sora.com
+sora.chatgpt.com
+
+# Claude / Anthropic
+claude.ai
+www.claude.ai
+api.claude.ai
+anthropic.com
+www.anthropic.com
+api.anthropic.com
+console.anthropic.com
+statsig.anthropic.com
+
+# Gemini / Google AI
+gemini.google.com
+aistudio.google.com
+alkalimakersuite-pa.clients6.google.com
+generativelanguage.googleapis.com
+notebooklm.google.com

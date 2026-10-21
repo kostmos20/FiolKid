@@ -11,6 +11,7 @@ public interface IZapretRunner
     string? LastError { get; }
     Task<bool> StartAsync(Strategy strategy, CancellationToken ct);
     void Stop();
+    void UnloadDriver();
 }
 
 /// <summary>
@@ -113,6 +114,35 @@ public sealed class ZapretManager : IZapretRunner
         _process = null;
         ChildProcesses.KillTree(process);
         process?.Dispose();
+    }
+
+    /// <summary>
+    /// Выгружает драйвер WinDivert, если он загружен из нашей папки. Сам он не выгружается до перезагрузки:
+    /// после «Остановить» в системе оставался бы работающий драйвер, а файл программы — занятым.
+    /// Перед сменой стратегии не вызывается: следующий winws подхватит уже загруженный драйвер.
+    /// </summary>
+    public void UnloadDriver()
+    {
+        try
+        {
+            using var driver = new System.ServiceProcess.ServiceController("WinDivert");
+            if (driver.Status == System.ServiceProcess.ServiceControllerStatus.Stopped || !IsOurDriver())
+                return;
+            driver.Stop();
+            driver.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(5));
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ServiceProcess.TimeoutException
+                                  or System.ComponentModel.Win32Exception)
+        {
+            // Драйвера нет, он занят другой программой или нет прав — не критично
+        }
+
+        bool IsOurDriver()
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\WinDivert");
+            var image = key?.GetValue("ImagePath") as string;
+            return image is not null && image.Contains(_binDir, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>

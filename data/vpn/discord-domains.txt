@@ -1,0 +1,16 @@
+# Discord: через VPN только в запасном режиме, если zapret не справился.
+# Голосовые серверы у Discord меняются динамически, поэтому голос в запасном режиме может не работать.
+discord.com
+www.discord.com
+gateway.discord.gg
+discord.gg
+discordapp.com
+cdn.discordapp.com
+media.discordapp.net
+images-ext-1.discordapp.net
+images-ext-2.discordapp.net
+discordapp.net
+updates.discord.com
+dl.discordapp.net
+discord.media
+status.discord.com

@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <None Include="..\..\data\strategies.json" Link="data\strategies.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\data\vpn\*.txt" Link="data\vpn\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

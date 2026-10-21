@@ -1,0 +1,8 @@
+# Telegram: через VPN только в запасном режиме (основной путь — локальный прокси tg-ws-proxy).
+# Вместе с этими доменами в туннель идут подсети из telegram-cidr.txt.
+telegram.org
+web.telegram.org
+t.me
+telegram.me
+tdesktop.com
+telesco.pe
