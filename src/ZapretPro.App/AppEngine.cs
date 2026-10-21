@@ -288,7 +288,9 @@ public sealed class AppEngine
             var sites = await SiteProbe.RunAsync(_vpn.CurrentRoutes, cts.Token);
             var marker = "--- журнал ---";
             var at = report.IndexOf(marker, StringComparison.Ordinal);
-            var block = $"--- сайты через VPN ---{Environment.NewLine}{sites}{Environment.NewLine}";
+            var recent = _vpn.RecentDns;
+            var block = $"--- сайты через VPN ---{Environment.NewLine}{sites}{Environment.NewLine}" +
+                        (recent.Count == 0 ? "" : $"--- свой DNS: последние сайты в VPN ---{Environment.NewLine}{string.Join(Environment.NewLine, recent)}{Environment.NewLine}");
             return at < 0 ? report + block : report.Insert(at, block);
         }
         catch (OperationCanceledException)

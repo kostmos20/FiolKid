@@ -402,6 +402,8 @@ public sealed class VpnTests : IDisposable
 
         public void UpdateClassifier(Func<string, RouteSet?> classify) => Classify = classify;
 
+        public IReadOnlyList<string> Recent => [];
+
         public Task StopAsync()
         {
             Active = false;

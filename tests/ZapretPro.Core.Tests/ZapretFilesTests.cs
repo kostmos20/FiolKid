@@ -28,6 +28,8 @@ public sealed class ZapretFilesTests : IDisposable
         Assert.All(file.Strategies, s =>
         {
             Assert.DoesNotMatch("%[^%\\s]+%", s.Args);
+            // «^» — экранирование cmd, winws его не понимает («could not read ^!»)
+            Assert.DoesNotContain("^", s.Args);
             Assert.Contains("{lists}list-general.txt", s.Args);
             Assert.Contains("{lists}list-exclude.txt", s.Args);
         });

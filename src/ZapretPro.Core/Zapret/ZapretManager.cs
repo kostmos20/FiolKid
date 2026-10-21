@@ -11,7 +11,12 @@ public interface IZapretRunner
     string? LastError { get; }
     Task<bool> StartAsync(Strategy strategy, CancellationToken ct);
     void Stop();
-    void UnloadDriver();
+
+    /// <summary>
+    /// winws упал на открытии драйвера WinDivert. Тогда дело не в стратегии, и перебирать остальные
+    /// бессмысленно: они упадут так же.
+    /// </summary>
+    bool DriverBroken { get; }
 }
 
 /// <summary>
@@ -49,6 +54,8 @@ public sealed class ZapretManager : IZapretRunner
 
     public string? LastError { get; private set; }
 
+    public bool DriverBroken { get; private set; }
+
     /// <summary>Последние строки вывода winws — для отчёта.</summary>
     public IReadOnlyList<string> RecentOutput => _output.Lines;
 
@@ -57,6 +64,7 @@ public sealed class ZapretManager : IZapretRunner
         Stop();
         KillStrayWinws();
         LastError = null;
+        DriverBroken = false;
 
         var winws = Path.Combine(_binDir, "winws.exe");
         if (!File.Exists(winws))
@@ -98,10 +106,26 @@ public sealed class ZapretManager : IZapretRunner
         await Task.Delay(StartupGrace, ct);
         if (process.HasExited)
         {
-            var tail = string.Join(" | ", _output.Lines.TakeLast(3));
-            LastError = $"winws завершился с кодом {process.ExitCode} на стратегии «{strategy.Id}»: {tail}";
+            var lines = _output.Lines;
+            var tail = string.Join(" | ", lines.TakeLast(3));
+            var exitCode = process.ExitCode;
             _process = null;
             process.Dispose();
+
+            // Ошибки драйвера winws пишет как «windivert: error …»
+            if (lines.Any(l => l.Contains("windivert:", StringComparison.OrdinalIgnoreCase)))
+            {
+                DriverBroken = true;
+                var others = OtherBypassTools();
+                LastError = "Не открывается драйвер zapret (WinDivert). Перезагрузи компьютер — обычно это помогает. " +
+                            (others.Count > 0
+                                ? $"Ещё на компьютере есть другой обход блокировок ({string.Join(", ", others)}) — его нужно выключить или удалить. "
+                                : "") +
+                            $"Подробности: {tail}";
+                return false;
+            }
+
+            LastError = $"winws завершился с кодом {exitCode} на стратегии «{strategy.Id}»: {tail}";
             return false;
         }
 
@@ -117,31 +141,23 @@ public sealed class ZapretManager : IZapretRunner
     }
 
     /// <summary>
-    /// Выгружает драйвер WinDivert, если он загружен из нашей папки. Сам он не выгружается до перезагрузки:
-    /// после «Остановить» в системе оставался бы работающий драйвер, а файл программы — занятым.
-    /// Перед сменой стратегии не вызывается: следующий winws подхватит уже загруженный драйвер.
+    /// Другие программы обхода блокировок, установленные службой Windows: они держат свой драйвер WinDivert
+    /// и мешают нашему. Наш winws мы и так закрываем перед запуском, а службы перезапускают свой сами.
     /// </summary>
-    public void UnloadDriver()
+    internal static IReadOnlyList<string> OtherBypassTools()
     {
+        string[] markers = ["zapret", "goodbyedpi", "winws", "byedpi", "spoofdpi", "windivert14"];
         try
         {
-            using var driver = new System.ServiceProcess.ServiceController("WinDivert");
-            if (driver.Status == System.ServiceProcess.ServiceControllerStatus.Stopped || !IsOurDriver())
-                return;
-            driver.Stop();
-            driver.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(5));
+            return System.ServiceProcess.ServiceController.GetServices()
+                .Where(s => markers.Any(m => s.ServiceName.Contains(m, StringComparison.OrdinalIgnoreCase)
+                                             || s.DisplayName.Contains(m, StringComparison.OrdinalIgnoreCase)))
+                .Select(s => $"служба «{s.DisplayName}»")
+                .ToList();
         }
-        catch (Exception e) when (e is InvalidOperationException or System.ServiceProcess.TimeoutException
-                                  or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            // Драйвера нет, он занят другой программой или нет прав — не критично
-        }
-
-        bool IsOurDriver()
-        {
-            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\WinDivert");
-            var image = key?.GetValue("ImagePath") as string;
-            return image is not null && image.Contains(_binDir, StringComparison.OrdinalIgnoreCase);
+            return [];
         }
     }
 

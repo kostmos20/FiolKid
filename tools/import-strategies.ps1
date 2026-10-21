@@ -31,6 +31,8 @@ $strategies = foreach ($bat in Get-ChildItem $src -Filter 'general*.bat') {
     if ($joined -notmatch '"%BIN%winws\.exe"\s+(.+)') { throw "Не нашёл вызов winws в $($bat.Name)" }
     $args = $Matches[1].Trim()
 
+    # «^» в cmd экранирует следующий символ: winws получает «!», а не «^!»
+    $args = $args -replace '\^(.)', '$1'
     $args = $args.Replace('%BIN%', '{bin}').Replace('%LISTS%', '{lists}')
     $args = $args -replace '%GameFilter(TCP|UDP)?%', '12'
     if ($args -match '%[^%\s]+%') { throw "В $($bat.Name) осталась незнакомая переменная $($Matches[0])" }

@@ -210,8 +210,9 @@ public sealed class Watchdog
     /// </summary>
     public async Task StopAsync(CancellationToken ct)
     {
+        // Драйвер WinDivert не выгружаем: принудительная остановка могла оставить его «застрявшим»,
+        // и до перезагрузки zapret не запускался (FWP_E_IN_USE). Он выгрузится сам при перезагрузке.
         _zapret.Stop();
-        _zapret.UnloadDriver();
         _telegram.Stop();
         await _vpn.StopAsync(ct);
         _vpnStatus = _vpn.Status;
@@ -243,6 +244,7 @@ public sealed class Watchdog
 
         var best = (Ok: 0, Index: -1, Missing: (IReadOnlyList<Service>)ZapretServices);
         var startErrors = 0;
+        var driverBroken = false;
 
         for (var i = 0; i < strategies.Count; i++)
         {
@@ -255,6 +257,12 @@ public sealed class Watchdog
                 startErrors++;
                 _lastError = _zapret.LastError;
                 Write($"Стратегия «{strategies[index].Id}» не запустилась: {_zapret.LastError}");
+                // Не открылся драйвер — остальные стратегии упадут так же, перебирать бессмысленно
+                if (_zapret.DriverBroken)
+                {
+                    driverBroken = true;
+                    break;
+                }
                 continue;
             }
 
@@ -298,7 +306,9 @@ public sealed class Watchdog
             _zapret.Stop();
             _current = -1;
             _zapretFallback.UnionWith(ZapretServices);
-            if (startErrors == strategies.Count)
+            if (driverBroken)
+                _lastError = _zapret.LastError;
+            else if (startErrors == strategies.Count)
                 _lastError = $"zapret не запускается ни с одной стратегией. Последняя ошибка: {_zapret.LastError}";
             Write("Ни одна стратегия не помогла — YouTube и Discord через запасной канал");
             SetState(ZapretState.Failed);

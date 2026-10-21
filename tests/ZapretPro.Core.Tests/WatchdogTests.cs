@@ -283,6 +283,19 @@ public sealed class WatchdogTests : IDisposable
     }
 
     [Fact]
+    public async Task Broken_driver_stops_search_at_once_and_says_reboot()
+    {
+        _zapret.BreakDriver = true;
+
+        await _watchdog.StartAsync(default);
+
+        Assert.Single(_zapret.Started);                 // а не все стратегии подряд
+        Assert.Equal(ZapretState.Failed, State);
+        Assert.Contains("Перезагрузи компьютер", _watchdog.Status.LastError);
+        Assert.Equal(new HashSet<RouteSet> { RouteSet.YouTube, RouteSet.Discord }, _vpn.Routes); // запасной канал всё равно включён
+    }
+
+    [Fact]
     public async Task Stop_stops_everything()
     {
         _zapret.Works("general");
@@ -293,7 +306,6 @@ public sealed class WatchdogTests : IDisposable
         Assert.False(_zapret.IsRunning);
         Assert.False(_telegram.IsRunning);
         Assert.True(_vpn.Stopped);
-        Assert.True(_zapret.DriverUnloaded);
         Assert.Equal(ZapretState.Stopped, State);
         Assert.Null(_watchdog.Status.StrategyId);
     }
@@ -416,6 +428,13 @@ public sealed class WatchdogTests : IDisposable
         public Task<bool> StartAsync(Strategy strategy, CancellationToken ct)
         {
             Started.Add(strategy.Id);
+            DriverBroken = BreakDriver;
+            if (BreakDriver)
+            {
+                IsRunning = false;
+                LastError = "Не открывается драйвер zapret (WinDivert). Перезагрузи компьютер";
+                return Task.FromResult(false);
+            }
             if (_failToStart.Contains(strategy.Id))
             {
                 IsRunning = false;
@@ -434,9 +453,8 @@ public sealed class WatchdogTests : IDisposable
             Current = null;
         }
 
-        public bool DriverUnloaded { get; private set; }
-
-        public void UnloadDriver() => DriverUnloaded = true;
+        public bool DriverBroken { get; private set; }
+        public bool BreakDriver { get; set; }
     }
 
     private sealed class FakeTelegram : ITelegramProxy

@@ -110,6 +110,7 @@ public sealed class SmartDns : IAsyncDisposable
         }
 
         var addresses = DnsMessage.ReadARecords(answer);
+        Remember($"{name} → {(addresses.Count == 0 ? "нет адресов" : string.Join(",", addresses))} ({set})");
         if (addresses.Count > 0)
         {
             try
@@ -122,6 +123,28 @@ public sealed class SmartDns : IAsyncDisposable
             }
         }
         return answer;
+    }
+
+    private readonly Queue<string> _recent = new();
+
+    /// <summary>Последние вопросы о сайтах через VPN — для отчёта: видно, что куда пошло.</summary>
+    public IReadOnlyList<string> Recent
+    {
+        get
+        {
+            lock (_recent)
+                return _recent.ToArray();
+        }
+    }
+
+    private void Remember(string line)
+    {
+        lock (_recent)
+        {
+            _recent.Enqueue($"{DateTime.Now:HH:mm:ss} {line}");
+            while (_recent.Count > 20)
+                _recent.Dequeue();
+        }
     }
 
     /// <summary>Спрашивает вышестоящие DNS по очереди; null — не ответил никто.</summary>

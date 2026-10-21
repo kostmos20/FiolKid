@@ -104,6 +104,9 @@ public sealed class VpnController : IVpn
 
     public bool HasKey => _keys.HasKey;
 
+    /// <summary>Последние сайты, которые наш DNS отправил в VPN, — для отчёта.</summary>
+    public IReadOnlyList<string> RecentDns => _dns?.Recent ?? [];
+
     /// <summary>Маршруты, которые сейчас ведут в туннель — для разбора проблем.</summary>
     public IReadOnlyList<string> CurrentRoutes => _runningConf is null ? [] : _routes.Installed;
 

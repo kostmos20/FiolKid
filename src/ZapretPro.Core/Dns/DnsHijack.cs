@@ -16,6 +16,9 @@ public interface IDnsHijack
     /// <summary>Сменить, какие домены идут через VPN (включился или выключился запасной режим).</summary>
     void UpdateClassifier(Func<string, RouteSet?> classify);
 
+    /// <summary>Последние сайты, отправленные в VPN, — для отчёта.</summary>
+    IReadOnlyList<string> Recent { get; }
+
     Task StopAsync();
 }
 
@@ -100,9 +103,15 @@ public sealed class DnsHijack : IDnsHijack
 
     public void UpdateClassifier(Func<string, RouteSet?> classify)
     {
-        if (_dns is not null)
-            _dns.Classify = classify;
+        if (_dns is null)
+            return;
+        _dns.Classify = classify;
+        // Windows помнит прежние ответы: без сброса, например, Discord после включения запасного режима
+        // ещё минуты ходил бы на старые адреса мимо VPN
+        SystemDns.FlushCache();
     }
+
+    public IReadOnlyList<string> Recent => _dns?.Recent ?? [];
 
     public async Task StopAsync()
     {
