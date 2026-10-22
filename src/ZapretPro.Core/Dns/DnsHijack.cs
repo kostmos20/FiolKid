@@ -19,6 +19,9 @@ public interface IDnsHijack
     /// <summary>Последние сайты, отправленные в VPN, — для отчёта.</summary>
     IReadOnlyList<string> Recent { get; }
 
+    /// <summary>Запросы через туннель часто теряются — VPN работает с перебоями.</summary>
+    bool Unstable { get; }
+
     Task StopAsync();
 }
 
@@ -112,6 +115,8 @@ public sealed class DnsHijack : IDnsHijack
     }
 
     public IReadOnlyList<string> Recent => _dns?.Recent ?? [];
+
+    public bool Unstable => _dns?.Unstable ?? false;
 
     public async Task StopAsync()
     {

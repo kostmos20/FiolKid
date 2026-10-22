@@ -207,15 +207,34 @@ public sealed class DnsTests
     {
         using var normal = new FakeUpstream("31.13.72.174");
         var dead = new IPEndPoint(IPAddress.Loopback, 9); // никто не слушает
+        var routed = new List<(IPAddress, RouteSet)>();
+        var logs = new List<string>();
         var dns = new SmartDns([normal.EndPoint], port: 0, secureUpstreams: [dead])
         {
-            Classify = _ => RouteSet.Blocked,
+            Classify = _ => RouteSet.Ai,
             TunnelUp = () => true,
+            OnResolved = (ips, set) =>
+            {
+                lock (routed)
+                    routed.AddRange(ips.Select(ip => (ip, set)));
+                return Task.CompletedTask;
+            },
         };
+        dns.Log += logs.Add;
 
-        var answer = await dns.HandleAsync(Query("x.com", DnsMessage.TypeA), default);
+        var answer = await dns.HandleAsync(Query("chatgpt.com", DnsMessage.TypeA), default);
 
         Assert.Equal([IPAddress.Parse("31.13.72.174")], DnsMessage.ReadARecords(answer));
+        // Адрес от обычного DNS всё равно ведём в VPN — иначе ChatGPT увидел бы российский адрес
+        Assert.Equal([(IPAddress.Parse("31.13.72.174"), RouteSet.Ai)], routed);
+        Assert.False(dns.Unstable);
+
+        // Много промахов подряд — «перебои», и в журнале не десятки одинаковых строк, а две
+        for (var i = 0; i < 6; i++)
+            await dns.HandleAsync(Query("chatgpt.com", DnsMessage.TypeA), default);
+        Assert.True(dns.Unstable);
+        Assert.Equal(2, logs.Count);
+        Assert.Contains("перебоями", logs[1]);
     }
 
     [Fact]

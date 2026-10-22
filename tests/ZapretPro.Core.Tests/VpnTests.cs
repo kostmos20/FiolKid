@@ -404,6 +404,8 @@ public sealed class VpnTests : IDisposable
 
         public IReadOnlyList<string> Recent => [];
 
+        public bool Unstable => false;
+
         public Task StopAsync()
         {
             Active = false;

@@ -327,6 +327,8 @@ public sealed class AppEngine
         sb.AppendLine($"Включено: {(IsOn ? "да" : "нет")}; состояние: {s.State}; стратегия: {s.StrategyId ?? "—"} ({s.StrategyNumber} из {s.StrategyCount})");
         sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}");
         sb.AppendLine($"VPN через: {s.Vpn.Profile ?? "—"}; {KeyState().Text}; {SubscriptionState().Text}");
+        if (_vpn.Unstable)
+            sb.AppendLine("VPN работает с перебоями: запросы через туннель часто теряются (возможно, ключ включён на другом устройстве)");
         foreach (var service in Enum.GetValues<Service>())
             sb.AppendLine($"{service}: {Look(service)}{(s.LastReport?.Problems.TryGetValue(service, out var p) == true ? $" — {p}" : "")}");
         if (s.LastReport is { } r)

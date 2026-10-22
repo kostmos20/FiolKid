@@ -119,6 +119,9 @@ public sealed class VpnController : IVpn
     /// <summary>Последние сайты, которые наш DNS отправил в VPN, — для отчёта.</summary>
     public IReadOnlyList<string> RecentDns => _dns?.Recent ?? [];
 
+    /// <summary>Запросы через туннель часто теряются — VPN работает с перебоями (обычно ключ включён ещё где-то).</summary>
+    public bool Unstable => _dns?.Unstable ?? false;
+
     /// <summary>Маршруты, которые сейчас ведут в туннель — для разбора проблем.</summary>
     public IReadOnlyList<string> CurrentRoutes => _runningConf is null ? [] : _routes.Installed;
 

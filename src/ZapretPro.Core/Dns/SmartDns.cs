@@ -103,14 +103,20 @@ public sealed class SmartDns : IAsyncDisposable
             return DnsMessage.EmptyAnswer(query);
 
         var answer = await ForwardAsync(query, _secureUpstreams, ct);
+        var viaVpn = answer is not null;
         if (answer is null)
         {
-            Log?.Invoke($"DNS через VPN не ответил для {name} — спрашиваю обычный DNS");
-            return await ForwardAsync(query, _normalUpstreams, ct) ?? DnsMessage.ServerFailure(query);
+            // Туннель ответил через раз — адрес берём у обычного DNS, но сайт всё равно ведём в VPN:
+            // иначе, например, ChatGPT увидел бы российский адрес
+            NoteSecureFailure(name);
+            answer = await ForwardAsync(query, _normalUpstreams, ct);
+            if (answer is null)
+                return DnsMessage.ServerFailure(query);
         }
 
         var addresses = DnsMessage.ReadARecords(answer);
-        Remember($"{name} → {(addresses.Count == 0 ? "нет адресов" : string.Join(",", addresses))} ({set})");
+        Remember($"{name} → {(addresses.Count == 0 ? "нет адресов" : string.Join(",", addresses))} ({set})" +
+                 (viaVpn ? "" : " [адрес от DNS провайдера]"));
         if (addresses.Count > 0)
         {
             try
@@ -123,6 +129,61 @@ public sealed class SmartDns : IAsyncDisposable
             }
         }
         return answer;
+    }
+
+    // Сколько раз за последние минуты DNS через VPN не ответил: много — значит, туннель работает с перебоями
+    private static readonly TimeSpan FailureWindow = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LogQuietPeriod = TimeSpan.FromMinutes(10);
+    private const int UnstableAfter = 5;
+    private readonly Queue<DateTime> _secureFailures = new();
+    private DateTime _lastFailureLog = DateTime.MinValue;
+    private DateTime _lastUnstableLog = DateTime.MinValue;
+
+    /// <summary>DNS через VPN часто не отвечает — туннель работает с перебоями.</summary>
+    public bool Unstable
+    {
+        get
+        {
+            lock (_secureFailures)
+            {
+                Prune(DateTime.UtcNow);
+                return _secureFailures.Count >= UnstableAfter;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Не пишем в журнал каждый промах (их бывают десятки в минуту): первый — и одно предупреждение,
+    /// если промахов стало много.
+    /// </summary>
+    private void NoteSecureFailure(string name)
+    {
+        var now = DateTime.UtcNow;
+        string? message = null;
+        lock (_secureFailures)
+        {
+            _secureFailures.Enqueue(now);
+            Prune(now);
+            if (_secureFailures.Count >= UnstableAfter && now - _lastUnstableLog >= LogQuietPeriod)
+            {
+                _lastUnstableLog = now;
+                message = "VPN-сервер отвечает с перебоями: запросы через туннель часто теряются. Чаще всего так бывает, " +
+                          "когда этот же ключ включён ещё на одном устройстве — на каждое устройство нужен свой ключ.";
+            }
+            else if (now - _lastFailureLog >= LogQuietPeriod)
+            {
+                _lastFailureLog = now;
+                message = $"DNS через VPN не ответил ({name}) — адрес взят у обычного DNS, сайт всё равно идёт через VPN";
+            }
+        }
+        if (message is not null)
+            Log?.Invoke(message);
+    }
+
+    private void Prune(DateTime now)
+    {
+        while (_secureFailures.Count > 0 && now - _secureFailures.Peek() > FailureWindow)
+            _secureFailures.Dequeue();
     }
 
     private readonly Queue<string> _recent = new();
