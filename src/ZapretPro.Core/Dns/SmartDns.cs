@@ -18,7 +18,8 @@ public sealed class SmartDns : IAsyncDisposable
     public static readonly IPEndPoint[] SecureUpstreams =
         [new(IPAddress.Parse("1.1.1.1"), 53), new(IPAddress.Parse("1.0.0.1"), 53)];
 
-    private static readonly TimeSpan UpstreamTimeout = TimeSpan.FromSeconds(2.5);
+    // На каждый способ (UDP, затем TCP): вместе меньше, чем Windows ждёт ответа нашего DNS
+    private static readonly TimeSpan UpstreamTimeout = TimeSpan.FromSeconds(1.5);
 
     private readonly int _port;
     private readonly IReadOnlyList<IPEndPoint> _normalUpstreams;
@@ -103,20 +104,31 @@ public sealed class SmartDns : IAsyncDisposable
             return DnsMessage.EmptyAnswer(query);
 
         var answer = await ForwardAsync(query, _secureUpstreams, ct);
-        var viaVpn = answer is not null;
-        if (answer is null)
+        var source = "";
+        if (answer is not null)
         {
-            // Туннель ответил через раз — адрес берём у обычного DNS, но сайт всё равно ведём в VPN:
-            // иначе, например, ChatGPT увидел бы российский адрес
+            lock (_goodAnswers)
+                _goodAnswers[(name, type)] = (answer, DateTime.UtcNow);
+        }
+        else
+        {
             NoteSecureFailure(name);
-            answer = await ForwardAsync(query, _normalUpstreams, ct);
+            // Провайдер даёт «свои» адреса (у Cloudflare — региональные для России): через VPN они
+            // часто не отвечают или выдают страну RU. Поэтому сначала — прошлый ответ, полученный через VPN
+            answer = RememberedAnswer(name, type, query);
+            source = " [прошлый ответ через VPN]";
             if (answer is null)
-                return DnsMessage.ServerFailure(query);
+            {
+                // Совсем нечего отдать — адрес берём у обычного DNS, но сайт всё равно ведём в VPN
+                answer = await ForwardAsync(query, _normalUpstreams, ct);
+                source = " [адрес от DNS провайдера]";
+                if (answer is null)
+                    return DnsMessage.ServerFailure(query);
+            }
         }
 
         var addresses = DnsMessage.ReadARecords(answer);
-        Remember($"{name} → {(addresses.Count == 0 ? "нет адресов" : string.Join(",", addresses))} ({set})" +
-                 (viaVpn ? "" : " [адрес от DNS провайдера]"));
+        Remember($"{name} → {(addresses.Count == 0 ? "нет адресов" : string.Join(",", addresses))} ({set}){source}");
         if (addresses.Count > 0)
         {
             try
@@ -129,6 +141,20 @@ public sealed class SmartDns : IAsyncDisposable
             }
         }
         return answer;
+    }
+
+    // Последние ответы, полученные через туннель: выручают, когда туннель на минуту перестал отвечать на DNS
+    private static readonly TimeSpan GoodAnswerLifetime = TimeSpan.FromHours(12);
+    private readonly Dictionary<(string Name, ushort Type), (byte[] Answer, DateTime At)> _goodAnswers = [];
+
+    private byte[]? RememberedAnswer(string name, ushort type, byte[] query)
+    {
+        lock (_goodAnswers)
+        {
+            if (!_goodAnswers.TryGetValue((name, type), out var good) || DateTime.UtcNow - good.At > GoodAnswerLifetime)
+                return null;
+            return DnsMessage.WithId(good.Answer, DnsMessage.Id(query));
+        }
     }
 
     // Сколько раз за последние минуты DNS через VPN не ответил: много — значит, туннель работает с перебоями
@@ -173,7 +199,7 @@ public sealed class SmartDns : IAsyncDisposable
             else if (now - _lastFailureLog >= LogQuietPeriod)
             {
                 _lastFailureLog = now;
-                message = $"DNS через VPN не ответил ({name}) — адрес взят у обычного DNS, сайт всё равно идёт через VPN";
+                message = $"DNS через VPN не ответил ({name}) — отдаю прошлый ответ через VPN, а если его нет — адрес от обычного DNS; сайт всё равно идёт через VPN";
             }
         }
         if (message is not null)
@@ -208,25 +234,61 @@ public sealed class SmartDns : IAsyncDisposable
         }
     }
 
-    /// <summary>Спрашивает вышестоящие DNS по очереди; null — не ответил никто.</summary>
-    private async Task<byte[]?> ForwardAsync(byte[] query, IReadOnlyList<IPEndPoint> upstreams, CancellationToken ct)
+    /// <summary>
+    /// Спрашивает все вышестоящие DNS сразу и берёт первый пригодный ответ; null — не ответил никто.
+    /// Каждый сервер — сначала по UDP, при молчании по TCP: в туннеле UDP иногда теряется, а TCP проходит.
+    /// </summary>
+    private static async Task<byte[]?> ForwardAsync(byte[] query, IReadOnlyList<IPEndPoint> upstreams, CancellationToken ct)
     {
-        foreach (var upstream in upstreams)
+        if (upstreams.Count == 0)
+            return null;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var pending = upstreams.Select(u => AskUpstreamAsync(query, u, stop.Token)).ToList();
+        var all = pending.ToArray();
+        try
         {
-            try
+            while (pending.Count > 0)
             {
-                var answer = await AskUdpAsync(query, upstream, ct);
-                if (answer is not null && DnsMessage.IsTruncated(answer))
-                    answer = await AskTcpAsync(query, upstream, ct) ?? answer;
+                var completed = await Task.WhenAny(pending);
+                pending.Remove(completed);
+                var answer = await completed;
                 if (answer is not null)
                     return answer;
             }
-            catch (Exception e) when (e is SocketException or IOException or OperationCanceledException && !ct.IsCancellationRequested)
-            {
-                // Следующий сервер
-            }
+            ct.ThrowIfCancellationRequested();
+            return null;
         }
-        return null;
+        finally
+        {
+            stop.Cancel();
+            await Task.WhenAll(all);
+        }
+    }
+
+    private static async Task<byte[]?> AskUpstreamAsync(byte[] query, IPEndPoint upstream, CancellationToken ct)
+    {
+        try
+        {
+            var answer = await AskUdpAsync(query, upstream, ct);
+            if (answer is not null && !DnsMessage.IsTruncated(answer))
+                return answer;
+        }
+        catch (Exception e) when (e is SocketException or IOException or OperationCanceledException)
+        {
+            // UDP может теряться отдельно от TCP
+        }
+        if (ct.IsCancellationRequested)
+            return null;
+        try
+        {
+            var answer = await AskTcpAsync(query, upstream, ct);
+            return answer is not null && DnsMessage.IsResponseTo(answer, query) && !DnsMessage.IsTruncated(answer)
+                ? answer : null;
+        }
+        catch (Exception e) when (e is SocketException or IOException or OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     private static async Task<byte[]?> AskUdpAsync(byte[] query, IPEndPoint upstream, CancellationToken ct)
@@ -234,13 +296,15 @@ public sealed class SmartDns : IAsyncDisposable
         using var socket = new Socket(upstream.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(UpstreamTimeout);
-        await socket.SendToAsync(query, SocketFlags.None, upstream, timeout.Token);
+        await socket.ConnectAsync(upstream, timeout.Token);
+        await socket.SendAsync(query, SocketFlags.None, timeout.Token);
         var buffer = new byte[4096];
         while (true)
         {
-            var received = await socket.ReceiveFromAsync(buffer, SocketFlags.None, upstream, timeout.Token);
-            if (received.ReceivedBytes >= 12 && DnsMessage.Id(buffer) == DnsMessage.Id(query))
-                return buffer[..received.ReceivedBytes];
+            var received = await socket.ReceiveAsync(buffer, SocketFlags.None, timeout.Token);
+            var answer = buffer[..received];
+            if (DnsMessage.IsResponseTo(answer, query))
+                return answer;
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using ZapretPro.Core.Vpn;
 
 namespace ZapretPro.Core.Health;
 
@@ -15,13 +16,12 @@ public static class SiteProbe
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(8);
 
-    public static async Task<string> RunAsync(IReadOnlyCollection<string> routes, CancellationToken ct)
+    /// <summary>
+    /// <paramref name="currentRoutes"/> читается после того, как DNS ответил про сайт: наш DNS добавляет
+    /// маршрут в момент ответа, и снимок «до» показал бы «в VPN 0 из 1».
+    /// </summary>
+    public static async Task<string> RunAsync(Func<IReadOnlyCollection<string>> currentRoutes, CancellationToken ct)
     {
-        var networks = routes
-            .Select(r => IPNetwork.TryParse(r, out var n) ? n : (IPNetwork?)null)
-            .OfType<IPNetwork>()
-            .ToList();
-
         var sb = new StringBuilder();
         var ipv6 = await HasIpv6Async(ct);
         sb.AppendLine($"IPv6 в интернет: {(ipv6 ? "ЕСТЬ — браузер может ходить мимо VPN" : "нет")}");
@@ -41,8 +41,18 @@ public static class SiteProbe
 
             var v4 = addresses.Where(a => a.AddressFamily == AddressFamily.InterNetwork).ToList();
             var v6 = addresses.Where(a => a.AddressFamily == AddressFamily.InterNetworkV6).ToList();
+            var networks = currentRoutes()
+                .Select(r => IPNetwork.TryParse(r, out var n) ? n : (IPNetwork?)null)
+                .OfType<IPNetwork>()
+                .ToList();
             var routed = v4.Count(ip => networks.Any(n => n.Contains(ip)));
-            sb.Append($"{site}: IPv4 {string.Join(",", v4)} (в VPN {routed} из {v4.Count})");
+            sb.Append($"{site}: IPv4 {string.Join(",", v4)} (в VPN {routed} из {v4.Count}");
+            var inspected = v4.Select(ip => TunnelRoutes.Inspect(ip, VpnManager.TunnelName)).ToList();
+            sb.Append($"; в таблице Windows {inspected.Count(x => x.InTable)} из {v4.Count}");
+            var windows = inspected.Where(x => x.WindowsSaysTunnel is not null).ToList();
+            if (windows.Count > 0)
+                sb.Append($"; GetBestRoute2: VPN {windows.Count(x => x.WindowsSaysTunnel == true)} из {windows.Count}");
+            sb.Append(')');
             if (v6.Count > 0)
                 sb.Append($"; IPv6 {v6.Count} шт.");
             sb.Append($"; по IPv4: {await OpenOverIpv4Async(site, ct)}");
@@ -68,17 +78,26 @@ public static class SiteProbe
                 var addresses = await System.Net.Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, family, token);
                 if (addresses.Length == 0)
                     throw new SocketException((int)SocketError.HostNotFound);
-                var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-                try
+                // Как браузер: не ответил один адрес — пробуем следующий
+                Exception? lastError = null;
+                foreach (var address in addresses)
                 {
-                    await socket.ConnectAsync(addresses[0], context.DnsEndPoint.Port, token);
-                    return new NetworkStream(socket, ownsSocket: true);
+                    var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                    using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    attempt.CancelAfter(TimeSpan.FromSeconds(3));
+                    try
+                    {
+                        await socket.ConnectAsync(address, context.DnsEndPoint.Port, attempt.Token);
+                        return new NetworkStream(socket, ownsSocket: true);
+                    }
+                    catch (Exception e) when (e is SocketException or OperationCanceledException)
+                    {
+                        socket.Dispose();
+                        token.ThrowIfCancellationRequested();
+                        lastError = e;
+                    }
                 }
-                catch
-                {
-                    socket.Dispose();
-                    throw;
-                }
+                throw lastError ?? new SocketException((int)SocketError.NotConnected);
             },
         };
         using var http = new HttpClient(handler) { Timeout = Timeout };

@@ -114,6 +114,22 @@ public static class DnsMessage
         return result;
     }
 
+    /// <summary>Принимаем только ответ на наш вопрос; SERVFAIL/REFUSED позволяют попробовать другой сервер.</summary>
+    internal static bool IsResponseTo(ReadOnlySpan<byte> answer, ReadOnlySpan<byte> query) =>
+        answer.Length >= HeaderLength && (answer[2] & 0x80) != 0 &&
+        Id(answer) == Id(query) && (answer[3] & 0x0F) is 0 or 3 &&
+        TryReadQuestion(answer, out var name, out var type, out _) &&
+        TryReadQuestion(query, out var queryName, out var queryType, out _) &&
+        name == queryName && type == queryType;
+
+    /// <summary>Копия ответа с другим номером запроса — чтобы отдать запомненный ответ на новый вопрос.</summary>
+    internal static byte[] WithId(ReadOnlySpan<byte> answer, ushort id)
+    {
+        var copy = answer.ToArray();
+        BinaryPrimitives.WriteUInt16BigEndian(copy, id);
+        return copy;
+    }
+
     private static bool SkipName(ReadOnlySpan<byte> message, ref int offset)
     {
         while (offset < message.Length)

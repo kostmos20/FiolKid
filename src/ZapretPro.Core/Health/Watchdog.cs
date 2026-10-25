@@ -32,6 +32,9 @@ public sealed record WatchdogStatus(
 {
     /// <summary>Драйвер zapret завис — поможет только перезагрузка. Об этом надо сказать человеку прямо.</summary>
     public bool NeedsReboot { get; init; }
+
+    /// <summary>Идёт замер скорости всех альтов (режим «самый быстрый»).</summary>
+    public bool Measuring { get; init; }
 }
 
 public sealed record WatchdogOptions
@@ -42,6 +45,8 @@ public sealed record WatchdogOptions
     public int FailuresBeforeSwitch { get; init; } = 2;
     /// <summary>Как часто пробовать вернуться с запасного канала (чтобы не гонять видео через сервер знакомого).</summary>
     public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(1);
+    /// <summary>Через сколько замер скорости альтов считается устаревшим.</summary>
+    public TimeSpan BenchmarkLifetime { get; init; } = TimeSpan.FromDays(7);
 }
 
 /// <summary>
@@ -56,6 +61,7 @@ public sealed class Watchdog
     private readonly ITelegramProxy _telegram;
     private readonly IVpn _vpn;
     private readonly IHealthProbe _probe;
+    private readonly IZapretSpeedProbe? _speed;
     private readonly SettingsStore _settings;
     private readonly WatchdogOptions _options;
     private readonly TimeProvider _time;
@@ -69,6 +75,7 @@ public sealed class Watchdog
     private string _lastProblems = "";
     private string? _lastError;
     private bool _needsReboot;
+    private bool _measuring;
 
     // Запасной режим: какие сервисы zapret сейчас отдал VPN, и с какого момента Telegram идёт через VPN
     private readonly HashSet<Service> _zapretFallback = [];
@@ -77,8 +84,9 @@ public sealed class Watchdog
     private VpnStatus _vpnStatus = VpnStatus.Initial;
 
     public Watchdog(IZapretRunner zapret, ITelegramProxy telegram, IVpn vpn, IHealthProbe probe, SettingsStore settings,
-        WatchdogOptions? options = null, TimeProvider? time = null)
+        WatchdogOptions? options = null, TimeProvider? time = null, IZapretSpeedProbe? speed = null)
     {
+        _speed = speed;
         _zapret = zapret;
         _telegram = telegram;
         _vpn = vpn;
@@ -102,7 +110,7 @@ public sealed class Watchdog
         _telegram.IsRunning,
         ViaVpn(),
         _vpnStatus,
-        _lastError) { NeedsReboot = _needsReboot };
+        _lastError) { NeedsReboot = _needsReboot, Measuring = _measuring };
 
     /// <summary>Запуск и бесконечный цикл проверок до отмены.</summary>
     public async Task RunAsync(CancellationToken ct)
@@ -123,16 +131,158 @@ public sealed class Watchdog
         {
             await EnsureTelegramAsync(ct);
             await ApplyVpnAsync(ct);
-
-            var saved = _settings.Load().LastStrategyId;
-            var start = Math.Max(0, IndexOf(saved));
-            Write(saved is null ? "Сохранённой стратегии нет, начинаю с первой" : $"Начинаю с сохранённой стратегии «{saved}»");
-            await SearchAsync(start, ct);
+            await StartStrategyAsync(ct);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>Сменили режим выбора альта в настройках — применить сразу.</summary>
+    public async Task ApplyStrategySettingsAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_state != ZapretState.Stopped)
+                await StartStrategyAsync(ct, "настройки изменены");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Кнопка «Замерить сейчас»: все альты по скорости, затем самый быстрый.</summary>
+    public async Task BenchmarkAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_state != ZapretState.Stopped && _speed is not null)
+                await BenchmarkCoreAsync(ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>С какого альта начать — по режиму из настроек.</summary>
+    private async Task StartStrategyAsync(CancellationToken ct, string? reason = null)
+    {
+        var settings = _settings.Load();
+        if (ManualIndex(settings) is { } manual)
+        {
+            Write($"Альт выбран вручную: «{settings.ManualStrategyId}»" + (reason is null ? "" : $" ({reason})"));
+            await SearchAsync(manual, ct, only: true);
+            return;
+        }
+        if (settings.EffectiveStrategyMode == StrategyModes.Fastest && _speed is not null && BenchmarkStale(settings))
+        {
+            await BenchmarkCoreAsync(ct);
+            return;
+        }
+
+        var saved = settings.LastStrategyId;
+        var start = Math.Max(0, IndexOf(saved));
+        Write(saved is null ? "Сохранённой стратегии нет, начинаю с первой" : $"Начинаю с сохранённой стратегии «{saved}»");
+        await SearchAsync(start, ct);
+    }
+
+    private int? ManualIndex(AppSettings settings) =>
+        settings.StrategyMode == StrategyModes.Manual && IndexOf(settings.ManualStrategyId) is >= 0 and var index ? index : null;
+
+    /// <summary>Замера нет, он старый или альты обновились — нужен новый.</summary>
+    private bool BenchmarkStale(AppSettings settings)
+    {
+        if (settings.StrategyBenchmarkAt is not { } at || settings.StrategyBenchmark is not { Count: > 0 } results)
+            return true;
+        if (_time.GetUtcNow() - at >= _options.BenchmarkLifetime)
+            return true;
+        return !_zapret.Strategies.Select(s => s.Id).ToHashSet().SetEquals(results.Select(r => r.Id));
+    }
+
+    /// <summary>
+    /// Запускает по очереди каждый альт и меряет, как быстро грузятся YouTube и Discord. Самый быстрый
+    /// из открывших больше всего становится текущим; если с ним что-то не открылось — обычный перебор с него.
+    /// </summary>
+    private async Task BenchmarkCoreAsync(CancellationToken ct)
+    {
+        var strategies = _zapret.Strategies;
+        _failures = 0;
+        _lastSearch = _time.GetUtcNow();
+        _measuring = true;
+        SetState(ZapretState.Searching);
+        StrategyScore? best;
+        try
+        {
+            if (_zapretFallback.Count > 0)
+            {
+                _zapretFallback.Clear();
+                await ApplyVpnAsync(ct);
+            }
+
+            Write($"Замеряю скорость всех альтов ({strategies.Count}) — это займёт пару минут");
+            var scores = new List<StrategyScore>();
+            for (var i = 0; i < strategies.Count; i++)
+            {
+                _current = i;
+                Notify();
+                var id = strategies[i].Id;
+                if (!await _zapret.StartAsync(strategies[i], ct))
+                {
+                    Write($"Альт «{id}» не запустился: {_zapret.LastError}");
+                    if (_zapret.DriverBroken)
+                        break;
+                    scores.Add(new StrategyScore(id, 0, 0, double.MaxValue));
+                    continue;
+                }
+                await Task.Delay(_options.WarmUp, _time, ct);
+                var (ok, total, ms) = await _speed!.MeasureZapretAsync(ct);
+                scores.Add(new StrategyScore(id, ok, total, ms));
+                Write($"Альт «{id}»: открылось {ok} из {total}, {ms / 1000:0.0} с");
+            }
+
+            best = scores.Where(s => s.Ok > 0).OrderByDescending(s => s.Ok).ThenBy(s => s.Milliseconds).FirstOrDefault();
+            // Неполный замер (завис драйвер) и пустой (не было интернета) не сохраняем: они не показывают, какой альт быстрее
+            if (scores.Count == strategies.Count && best is not null)
+            {
+                _settings.Update(s =>
+                {
+                    s.StrategyBenchmarkAt = _time.GetUtcNow();
+                    s.StrategyBenchmark = scores.Select(x => new StrategyBenchmarkEntry(x.Id, x.Ok, x.Total,
+                        x.Milliseconds == double.MaxValue ? -1 : Math.Round(x.Milliseconds))).ToList();
+                });
+            }
+        }
+        finally
+        {
+            _measuring = false;
+        }
+
+        if (best is null)
+        {
+            Write("Замер ничего не дал — перебираю альты по порядку");
+            await SearchAsync(0, ct);
+            return;
+        }
+        Write($"Самый быстрый альт: «{best.Id}» ({best.Milliseconds / 1000:0.0} с)");
+        _settings.Update(s => s.LastStrategyId = best.Id);
+        await SearchAsync(IndexOf(best.Id), ct);
+    }
+
+    /// <summary>Текущий альт перестал помогать: что делать — зависит от режима.</summary>
+    private async Task RecoverStrategyAsync(CancellationToken ct)
+    {
+        var settings = _settings.Load();
+        if (ManualIndex(settings) is { } manual)
+            await SearchAsync(manual, ct, only: true);
+        else if (settings.EffectiveStrategyMode == StrategyModes.Fastest && _speed is not null)
+            await BenchmarkCoreAsync(ct);
+        else
+            await SearchAsync(_current + 1, ct);
     }
 
     /// <summary>Одна плановая проверка. Можно вызвать и вне расписания («Проверить сейчас»).</summary>
@@ -150,7 +300,10 @@ public sealed class Watchdog
                 && _time.GetUtcNow() - _lastSearch >= _options.RetryInterval)
             {
                 Write("Прошёл час — пробую снова обойтись без запасного канала");
-                await SearchAsync(_state == ZapretState.Failed ? 0 : _current + 1, ct);
+                if (ManualIndex(_settings.Load()) is { } manual)
+                    await SearchAsync(manual, ct, only: true);
+                else
+                    await SearchAsync(_state == ZapretState.Failed ? 0 : _current + 1, ct);
                 return;
             }
 
@@ -160,7 +313,7 @@ public sealed class Watchdog
                 if (!await _zapret.StartAsync(_zapret.Strategies[_current], ct))
                 {
                     _lastError = _zapret.LastError;
-                    await SearchAsync(_current + 1, ct);
+                    await RecoverStrategyAsync(ct);
                     return;
                 }
             }
@@ -194,7 +347,7 @@ public sealed class Watchdog
                     Write($"Проверка не прошла ({_failures} из {_options.FailuresBeforeSwitch})");
                     if (_failures >= _options.FailuresBeforeSwitch)
                     {
-                        await SearchAsync(_current + 1, ct);
+                        await RecoverStrategyAsync(ct);
                         return;
                     }
                     Notify();
@@ -233,7 +386,8 @@ public sealed class Watchdog
     /// Первая, при которой открылось всё, становится рабочей. Если такой нет — берём лучшую из
     /// частично рабочих, а остальное отдаём VPN; если не помогла ни одна — YouTube и Discord идут через VPN.
     /// </summary>
-    private async Task SearchAsync(int start, CancellationToken ct)
+    /// <param name="only">Проверить только альт <paramref name="start"/> (выбран вручную): не помог — недостающее через VPN.</param>
+    private async Task SearchAsync(int start, CancellationToken ct, bool only = false)
     {
         var strategies = _zapret.Strategies;
         _failures = 0;
@@ -251,7 +405,8 @@ public sealed class Watchdog
         var startErrors = 0;
         var driverBroken = false;
 
-        for (var i = 0; i < strategies.Count; i++)
+        var count = only ? 1 : strategies.Count;
+        for (var i = 0; i < count; i++)
         {
             var index = (start + i) % strategies.Count;
             _current = index;
@@ -303,7 +458,8 @@ public sealed class Watchdog
         if (driverBroken)
             Write("Нужна перезагрузка компьютера: драйвер zapret завис");
 
-        if (best.Index >= 0 && await _zapret.StartAsync(strategies[best.Index], ct))
+        // Лучший и так запущен последним (например, единственный выбранный вручную) — не перезапускаем
+        if (best.Index >= 0 && (best.Index == _current && _zapret.IsRunning || await _zapret.StartAsync(strategies[best.Index], ct)))
         {
             _current = best.Index;
             _zapretFallback.UnionWith(best.Missing);
@@ -318,7 +474,7 @@ public sealed class Watchdog
             _zapretFallback.UnionWith(ZapretServices);
             if (driverBroken)
                 _lastError = _zapret.LastError;
-            else if (startErrors == strategies.Count)
+            else if (startErrors == count)
                 _lastError = $"zapret не запускается ни с одной стратегией. Последняя ошибка: {_zapret.LastError}";
             Write("Ни одна стратегия не помогла — YouTube и Discord через запасной канал");
             SetState(ZapretState.Failed);
@@ -404,6 +560,27 @@ public sealed class Watchdog
 
         Notify();
         return _lastReport;
+    }
+
+    /// <summary>Кнопка «Перезапустить прокси»: остановить и запустить заново, затем проверить.</summary>
+    public async Task RestartTelegramAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_state == ZapretState.Stopped)
+                return;
+            Write("Перезапускаю прокси Telegram по просьбе");
+            _telegram.Stop();
+            _telegramFallbackSince = null;
+            _telegramFailures = 0;
+            await EnsureTelegramAsync(ct);
+            await ProbeAsync(ct);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task EnsureTelegramAsync(CancellationToken ct)

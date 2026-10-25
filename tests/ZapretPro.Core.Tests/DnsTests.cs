@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -99,7 +99,7 @@ public sealed class DnsTests
     {
         private readonly UdpClient _udp = new(new IPEndPoint(IPAddress.Loopback, 0));
 
-        public FakeUpstream(string ip)
+        public FakeUpstream(string ip, Func<byte[], byte[]>? response = null)
         {
             _ = Task.Run(async () =>
             {
@@ -116,13 +116,17 @@ public sealed class DnsTests
                     }
                     DnsMessage.TryReadQuestion(request.Buffer, out var name, out _, out _);
                     Asked.Add(name);
-                    await _udp.SendAsync(Answer(request.Buffer, ip), request.RemoteEndPoint);
+                    if (Silent)
+                        continue;
+                    await _udp.SendAsync(response?.Invoke(request.Buffer) ?? Answer(request.Buffer, ip), request.RemoteEndPoint);
                 }
             });
         }
 
         public IPEndPoint EndPoint => (IPEndPoint)_udp.Client.LocalEndPoint!;
         public System.Collections.Concurrent.ConcurrentBag<string> Asked { get; } = [];
+        /// <summary>Перестать отвечать — как туннель, который вдруг начал терять UDP.</summary>
+        public bool Silent { get; set; }
         public void Dispose() => _udp.Dispose();
     }
 
@@ -258,9 +262,9 @@ public sealed class DnsTests
         Assert.True(system.HasBackup);
         Assert.Contains("192.168.100.1:53", upstreams.Select(u => u.ToString()));
         Assert.Contains("interface ipv4 set dnsservers name=\"Ethernet\" source=static address=127.0.0.1 register=primary validate=no", commands);
-        Assert.Contains("interface ipv4 add dnsservers name=\"Ethernet\" address=192.168.100.1 index=2 validate=no", commands);
+        // Второго DNS провайдера нет: Windows не должна спрашивать его мимо нас
+        Assert.DoesNotContain(commands, c => c.StartsWith("interface ipv4 add dnsservers"));
         Assert.Contains("interface ipv6 set dnsservers name=\"Ethernet\" source=static address=::1 register=primary validate=no", commands);
-        Assert.Contains("interface ipv4 add dnsservers name=\"Wi-Fi\" address=8.8.8.8 index=2 validate=no", commands);
 
         commands.Clear();
         await system.RestoreAsync();
@@ -322,5 +326,110 @@ public sealed class DnsTests
 
         Assert.Equal(0x4242, DnsMessage.Id(reply.Buffer));
         Assert.Equal([IPAddress.Parse("87.250.250.242")], DnsMessage.ReadARecords(reply.Buffer));
+    }
+
+    [Fact]
+    public async Task A_silent_first_server_does_not_delay_the_second_server()
+    {
+        using var silent = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        using var fast = new FakeUpstream("104.18.32.47");
+        await using var dns = new SmartDns([], port: 0,
+            secureUpstreams: [(IPEndPoint)silent.Client.LocalEndPoint!, fast.EndPoint])
+        {
+            Classify = _ => RouteSet.Ai,
+            TunnelUp = () => true,
+        };
+        var answer = await dns.HandleAsync(Query("chatgpt.com", 1), default).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal([IPAddress.Parse("104.18.32.47")], DnsMessage.ReadARecords(answer));
+    }
+
+    [Fact]
+    public async Task Tcp_is_used_when_udp_is_silent()
+    {
+        var tcp = new TcpListener(IPAddress.Loopback, 0);
+        tcp.Start();
+        try
+        {
+            var endpoint = (IPEndPoint)tcp.LocalEndpoint;
+            using var silentUdp = new UdpClient(endpoint);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            var server = Task.Run(async () =>
+            {
+                using var connection = await tcp.AcceptTcpClientAsync(timeout.Token);
+                var stream = connection.GetStream();
+                var size = new byte[2];
+                await stream.ReadExactlyAsync(size, timeout.Token);
+                var request = new byte[BinaryPrimitives.ReadUInt16BigEndian(size)];
+                await stream.ReadExactlyAsync(request, timeout.Token);
+                var answer = Answer(request, "104.18.32.47");
+                BinaryPrimitives.WriteUInt16BigEndian(size, (ushort)answer.Length);
+                await stream.WriteAsync(size, timeout.Token);
+                await stream.WriteAsync(answer, timeout.Token);
+            }, timeout.Token);
+            await using var dns = new SmartDns([], port: 0, secureUpstreams: [endpoint])
+            {
+                Classify = _ => RouteSet.Ai,
+                TunnelUp = () => true,
+            };
+            var answer = await dns.HandleAsync(Query("chatgpt.com", 1), timeout.Token);
+            Assert.Equal([IPAddress.Parse("104.18.32.47")], DnsMessage.ReadARecords(answer));
+            await server;
+        }
+        finally
+        {
+            tcp.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Servfail_from_one_upstream_does_not_override_a_valid_answer()
+    {
+        using var failed = new FakeUpstream("1.2.3.4", q => DnsMessage.ServerFailure(q));
+        using var working = new FakeUpstream("104.18.32.47");
+        await using var dns = new SmartDns([], port: 0, secureUpstreams: [failed.EndPoint, working.EndPoint])
+        {
+            Classify = _ => RouteSet.Ai,
+            TunnelUp = () => true,
+        };
+        var answer = await dns.HandleAsync(Query("chatgpt.com", 1), default);
+        Assert.Equal([IPAddress.Parse("104.18.32.47")], DnsMessage.ReadARecords(answer));
+        Assert.Equal(0, answer[3] & 15);
+    }
+
+    [Theory]
+    [InlineData("other.com", 1)]
+    [InlineData("chatgpt.com", 28)]
+    public void Responses_for_another_question_are_rejected(string name, ushort type)
+    {
+        var query = Query("chatgpt.com", 1);
+        Assert.False(DnsMessage.IsResponseTo(Answer(Query(name, type), "1.2.3.4"), query));
+        Assert.False(DnsMessage.IsResponseTo(query, query));
+    }
+
+    [Fact]
+    public async Task When_tunnel_dns_goes_silent_the_last_tunnel_answer_wins_over_the_provider()
+    {
+        // Случай Ивана: первый ответ через VPN — настоящий адрес ChatGPT, потом туннель теряет DNS,
+        // а провайдер отдаёт «российский» адрес Cloudflare, через который ChatGPT видит RU
+        using var provider = new FakeUpstream("8.47.69.5");
+        using var secure = new FakeUpstream("104.18.32.47");
+        var resolved = new List<IPAddress>();
+        await using var dns = new SmartDns([provider.EndPoint], port: 0, secureUpstreams: [secure.EndPoint])
+        {
+            Classify = _ => RouteSet.Ai,
+            TunnelUp = () => true,
+            OnResolved = (a, _) => { resolved.AddRange(a); return Task.CompletedTask; },
+        };
+
+        await dns.HandleAsync(Query("chatgpt.com", 1), default);
+        secure.Silent = true;
+        var query = Query("chatgpt.com", 1);
+        var answer = await dns.HandleAsync(query, default);
+
+        Assert.Equal([IPAddress.Parse("104.18.32.47")], DnsMessage.ReadARecords(answer));
+        Assert.Equal(DnsMessage.Id(query), DnsMessage.Id(answer));
+        Assert.Empty(provider.Asked);
+        Assert.Contains("прошлый ответ через VPN", dns.Recent[^1]);
+        Assert.All(resolved, ip => Assert.Equal(IPAddress.Parse("104.18.32.47"), ip));
     }
 }

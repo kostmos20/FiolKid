@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.IO;
+using System.Windows;
 using ZapretPro.Core.Infrastructure;
 
 namespace ZapretPro.App;
@@ -14,12 +15,19 @@ public partial class App : Application
     /// <summary>Выход по-настоящему (из меню трея), а не сворачивание окна.</summary>
     public bool IsExiting { get; private set; }
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
+        if (e.Args.FirstOrDefault() == "--dns-guard")
+        {
+            await DnsRecoveryGuard.RunAsync(e.Args);
+            Shutdown();
+            return;
+        }
+
         // Второй экземпляр запустил бы второй winws и второй VPN поверх первых
-        _singleInstance = new Mutex(true, @"Local\FiolKid", out var first);
+        _singleInstance = new Mutex(true, DnsRecoveryGuard.InstanceMutex, out var first);
         if (!first)
         {
             MessageBox.Show("FiolKid уже запущен — его значок (кружочек) возле часов.", "FiolKid");
@@ -27,10 +35,23 @@ public partial class App : Application
             return;
         }
 
+        // Сторож — до Job Object: иначе он завершился бы вместе с программой и не успел вернуть DNS
+        string? guardError = null;
+        try
+        {
+            DnsRecoveryGuard.Start();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+        {
+            guardError = ex.Message;
+        }
+
         // До запуска winws и прокси: тогда они завершатся вместе с программой, даже если она упадёт
         ChildProcesses.BindToCurrentProcess();
 
         Engine = new AppEngine();
+        if (guardError is not null)
+            Engine.Note($"Сторож DNS не запустился ({guardError}): если программа упадёт, DNS вернётся только при следующем запуске");
         _main = new MainWindow(Engine);
         Tray = new TrayIcon(Engine, ShowMain, ExitAsync);
 
@@ -68,6 +89,8 @@ public partial class App : Application
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
         base.OnSessionEnding(e);
+        if (Engine is null)
+            return;
         IsExiting = true;
         Task.Run(() => Engine.TurnOffAsync(remember: false)).Wait(TimeSpan.FromSeconds(15));
     }

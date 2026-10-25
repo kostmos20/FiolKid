@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -183,6 +185,116 @@ public sealed class SubscriptionTests : IDisposable
         await process.WaitForExitAsync();
 
         Assert.True(process.ExitCode == 0, $"sing-box check: {output}");
+    }
+
+    /// <summary>
+    /// Замер серверов настоящим sing-box: «серверы» — прямой выход и неработающий SOCKS, сайты для замера —
+    /// локальный HTTP-сервер. Проверяем, что рабочий сервер получил задержку, скорость и страну, а мёртвый — нет.
+    /// </summary>
+    [Fact]
+    public async Task Real_singbox_benchmark_measures_each_server_separately()
+    {
+        var singBox = FindUp("third_party", "sing-box", "sing-box.exe");
+        if (singBox is null)
+            return;
+        Directory.CreateDirectory(_dir);
+
+        var site = new TcpListener(IPAddress.Loopback, 0);
+        site.Start();
+        var port = ((IPEndPoint)site.LocalEndpoint).Port;
+        using var stop = new CancellationTokenSource();
+        _ = ServeAsync(site, stop.Token);
+        var closed = new TcpListener(IPAddress.Loopback, 0);
+        closed.Start();
+        var deadPort = ((IPEndPoint)closed.LocalEndpoint).Port;
+        closed.Stop();
+
+        ProxyServer[] servers =
+        [
+            new("direct", "127.0.0.1", 1, "Рабочий", new JsonObject { ["type"] = "direct" }),
+            new("socks", "127.0.0.1", deadPort, "Мёртвый",
+                new JsonObject { ["type"] = "socks", ["server"] = "127.0.0.1", ["server_port"] = deadPort }),
+        ];
+        var benchmark = new ServerBenchmark(Path.GetDirectoryName(singBox)!, _dir, protect: false)
+        {
+            PingUrl = $"http://127.0.0.1:{port}/ping",
+            TraceUrl = $"http://127.0.0.1:{port}/trace",
+            SpeedUrl = $"http://127.0.0.1:{port}/down",
+        };
+        try
+        {
+            var scores = await benchmark.RunAsync(servers, new CancellationTokenSource(TimeSpan.FromSeconds(60)).Token);
+
+            var good = scores.Single(s => s.Name == "Рабочий");
+            var dead = scores.Single(s => s.Name == "Мёртвый");
+            Assert.True(good.Works);
+            Assert.Equal("NL", good.Country);
+            Assert.True(good.Mbps > 0);
+            Assert.False(dead.Works);
+            Assert.Equal(good.Key, scores[0].Key);
+            Assert.Equal([good.Key], ServerBenchmark.Best(scores));
+            Assert.False(File.Exists(Path.Combine(_dir, "sing-box-benchmark.json"))); // конфиг с паролями не остаётся
+        }
+        finally
+        {
+            stop.Cancel();
+            site.Stop();
+        }
+    }
+
+    [Fact]
+    public void Best_servers_skip_russian_exits_unless_nothing_else_works()
+    {
+        ServerScore[] scores =
+        [
+            new("a", "Москва", "vless", 20, 90, "RU", null),
+            new("b", "Швеция", "vless", 60, 40, "SE", null),
+            new("c", "Германия", "vless", 50, 10, "DE", null),
+            new("d", "Мёртвый", "vless", null, null, null, "не ответил"),
+        ];
+        Assert.Equal(["b", "c"], ServerBenchmark.Best(scores));
+        Assert.Equal(["a"], ServerBenchmark.Best([scores[0], scores[3]]));
+    }
+
+    /// <summary>Мини-сайт для замера: /trace — страна, /down — 2 МБ, остальное — пустой ответ.</summary>
+    private static async Task ServeAsync(TcpListener listener, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            TcpClient client;
+            try
+            {
+                client = await listener.AcceptTcpClientAsync(ct);
+            }
+            catch (Exception e) when (e is OperationCanceledException or SocketException or ObjectDisposedException)
+            {
+                return;
+            }
+            _ = Task.Run(async () =>
+            {
+                using (client)
+                {
+                    try
+                    {
+                        var stream = client.GetStream();
+                        var reader = new StreamReader(stream, Encoding.ASCII);
+                        var first = await reader.ReadLineAsync(ct) ?? "";
+                        while (!string.IsNullOrEmpty(await reader.ReadLineAsync(ct)))
+                        {
+                        }
+                        var body = first.Contains("/trace") ? Encoding.ASCII.GetBytes("ip=203.0.113.5\nloc=NL\n")
+                            : first.Contains("/down") ? new byte[2_000_000] : [];
+                        var head = Encoding.ASCII.GetBytes(
+                            $"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
+                        await stream.WriteAsync(head, ct);
+                        await stream.WriteAsync(body, ct);
+                    }
+                    catch (Exception e) when (e is IOException or OperationCanceledException or SocketException)
+                    {
+                    }
+                }
+            }, ct);
+        }
     }
 
     [Fact]

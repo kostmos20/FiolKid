@@ -1,3 +1,4 @@
+using ZapretPro.Core.Infrastructure;
 using ZapretPro.Core.Key;
 
 namespace ZapretPro.Core.Vpn;
@@ -82,15 +83,32 @@ public sealed class SubscriptionProfile : IVpnProfile
     private readonly SubscriptionStore _store;
     private readonly SubscriptionClient _client;
     private readonly TimeProvider _time;
+    private readonly SettingsStore? _settings;
+    private readonly ServerBenchmark? _benchmark;
+    private readonly SemaphoreSlim _benchmarkGate = new(1, 1);
     private DateTimeOffset _retryFetchAt;
 
-    public SubscriptionProfile(SubscriptionStore store, SubscriptionClient client, IVpnTunnel tunnel, TimeProvider? time = null)
+    // Замер серверов повторяем раз в сутки: серверы подписки и их загрузка меняются
+    private static readonly TimeSpan BenchmarkLifetime = TimeSpan.FromHours(24);
+
+    public SubscriptionProfile(SubscriptionStore store, SubscriptionClient client, IVpnTunnel tunnel, TimeProvider? time = null,
+        SettingsStore? settings = null, ServerBenchmark? benchmark = null)
     {
         _store = store;
         _client = client;
         Tunnel = tunnel;
         _time = time ?? TimeProvider.System;
+        _settings = settings;
+        _benchmark = benchmark;
+        if (_benchmark is not null)
+            _benchmark.Log += m => Log?.Invoke(m);
     }
+
+    /// <summary>Сейчас идёт замер серверов — для экрана настроек.</summary>
+    public bool Measuring { get; private set; }
+
+    /// <summary>Серверы, через которые подключён туннель (лучшие по замеру или выбранный вручную).</summary>
+    public IReadOnlyList<string> ChosenNames { get; private set; } = [];
 
     public event Action<string>? Log;
 
@@ -156,11 +174,91 @@ public sealed class SubscriptionProfile : IVpnProfile
         }
 
         Error = null;
+        var selected = await ChooseServersAsync(Info.Servers, source, ct);
+        ChosenNames = selected.Select(s => s.Name).ToList();
+        return new TunnelPlan(SingBoxConfig.Build(selected, VpnManager.TunnelName), selected.Select(s => s.Host).Distinct().ToList());
+    }
+
+    /// <summary>
+    /// Через какие серверы подключаться: выбранный вручную; иначе — три лучших по замеру скорости
+    /// (sing-box держит их в автовыборе и переключится, если один перестанет отвечать); замера нет —
+    /// как раньше, до 20 серверов по типу.
+    /// </summary>
+    private async Task<IReadOnlyList<ProxyServer>> ChooseServersAsync(IReadOnlyList<ProxyServer> servers, string source, CancellationToken ct)
+    {
+        var settings = _settings?.Load();
+        if (settings?.ServerAutoSelect == false)
+        {
+            var manual = servers.FirstOrDefault(s => s.Key == settings.ManualServerKey);
+            if (manual is not null)
+                return [manual];
+            Log?.Invoke("Выбранного вручную сервера больше нет в подписке — выбираю сам");
+        }
+
+        if (settings is not null)
+        {
+            var keys = servers.Select(s => s.Key).ToHashSet();
+            var scores = settings.ServerBenchmark;
+            var fresh = scores is { Count: > 0 } && settings.ServerBenchmarkAt is { } at && _time.GetUtcNow() - at < BenchmarkLifetime
+                        && scores.All(s => keys.Contains(s.Key));
+            if (!fresh && _benchmark is not null)
+                scores = (await MeasureAsync(servers, ct))?.ToList() ?? scores;
+            var best = ServerBenchmark.Best(scores ?? []).Select(k => servers.FirstOrDefault(s => s.Key == k)).OfType<ProxyServer>().ToList();
+            if (best.Count > 0)
+                return best;
+        }
+
         // Один и тот же выбор серверов для одной и той же подписки: иначе конфиг менялся бы при каждом
         // обновлении списка и VPN зря переподключался бы
-        var seed = StableHash(source);
-        var selected = SingBoxConfig.Select(Info.Servers, random: new Random(seed));
-        return new TunnelPlan(SingBoxConfig.Build(selected, VpnManager.TunnelName), selected.Select(s => s.Host).Distinct().ToList());
+        return SingBoxConfig.Select(servers, random: new Random(StableHash(source)));
+    }
+
+    /// <summary>Кнопка «Замерить серверы»: заново по сохранённому списку подписки.</summary>
+    public async Task<IReadOnlyList<ServerScore>?> MeasureNowAsync(CancellationToken ct)
+    {
+        var cache = _store.LoadCache();
+        if (cache is null)
+            return null;
+        var servers = SubscriptionParser.Parse(cache.Body, cache.Headers).Servers;
+        return servers.Count == 0 ? null : await MeasureAsync(servers, ct);
+    }
+
+    private async Task<IReadOnlyList<ServerScore>?> MeasureAsync(IReadOnlyList<ProxyServer> servers, CancellationToken ct)
+    {
+        if (_benchmark is null || _settings is null)
+            return null;
+        await _benchmarkGate.WaitAsync(ct);
+        Measuring = true;
+        try
+        {
+            // Сначала лучшие по типу: если серверов больше 40, меряем самые перспективные
+            var candidates = SingBoxConfig.Select(servers, ServerBenchmark.MaxServers, new Random(1));
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(TimeSpan.FromSeconds(120));
+            var scores = await _benchmark.RunAsync(candidates, limit.Token);
+            _settings.Update(s =>
+            {
+                s.ServerBenchmarkAt = _time.GetUtcNow();
+                s.ServerBenchmark = scores.ToList();
+            });
+            var working = scores.Count(s => s.Works);
+            var top = scores.FirstOrDefault(s => s.Works);
+            Log?.Invoke($"Замер серверов: отвечают {working} из {scores.Count}" + (top is null ? "" :
+                $"; лучший «{top.Name}» — {top.PingMs} мс" + (top.Mbps is { } m ? $", {m} Мбит/с" : "") +
+                (top.Country is { } c ? $", выход {c}" : "")));
+            return scores;
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException
+                                      or System.ComponentModel.Win32Exception || e is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            Log?.Invoke($"Замер серверов не получился: {e.Message}");
+            return null;
+        }
+        finally
+        {
+            Measuring = false;
+            _benchmarkGate.Release();
+        }
     }
 
     private static int StableHash(string text)

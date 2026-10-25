@@ -123,8 +123,14 @@ public sealed class DnsHijack : IDnsHijack
         var dns = _dns;
         _dns = null;
         // Сначала вернуть DNS Windows, потом освободить порт
-        await _system.RestoreAsync();
-        if (dns is not null)
-            await dns.DisposeAsync();
+        try
+        {
+            await _system.RestoreAsync();
+        }
+        finally
+        {
+            if (dns is not null)
+                await dns.DisposeAsync();
+        }
     }
 }

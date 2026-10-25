@@ -21,11 +21,17 @@ public sealed record HealthReport(IReadOnlyDictionary<Service, bool> Services, b
     /// <summary>Страна, из которой нейросети видят запрос (код Cloudflare, например NL). Null — не проверяли или не ответили.</summary>
     public string? AiCountry { get; init; }
 
+    /// <summary>Внешний IP, который видит Cloudflare перед ChatGPT, — по нему видно, через какой сервер шёл запрос.</summary>
+    public string? AiExitIp { get; init; }
+
     /// <summary>
     /// Какие программы (Telegram, AyuGram…) сейчас подключены к нашему прокси. Пусто — Telegram ещё не
     /// подключили к прокси, и он не работает, даже если сам прокси исправен. Null — не проверяли.
     /// </summary>
     public IReadOnlyList<string>? TelegramClients { get; init; }
+
+    /// <summary>Запущен ли вообще Telegram Desktop (или AyuGram и т. п.). Закрыт — это не поломка.</summary>
+    public bool TelegramAppRunning { get; init; }
 
     /// <summary>Почему не прошла проверка сервиса — для журнала и отчёта.</summary>
     public IReadOnlyDictionary<Service, string> Problems { get; init; } = new Dictionary<Service, string>();
@@ -47,7 +53,7 @@ public interface IHealthProbe
 /// Не прошедшую проверку повторяем один раз: единичный сбой (например, в момент
 /// подключения VPN) не должен красить индикатор на всё время до следующей проверки.
 /// </summary>
-public sealed class HealthChecker : IHealthProbe
+public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(7);
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
@@ -79,13 +85,15 @@ public sealed class HealthChecker : IHealthProbe
         _telegramSecret = telegramSecret;
     }
 
+    public Task<(int Ok, int Total, double Milliseconds)> MeasureZapretAsync(CancellationToken ct) => ZapretSpeed.MeasureAsync(ct);
+
     public static bool IsAiCountryOk(string? country) => country is not null && !AiBlockedCountries.Contains(country);
 
     public async Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
     {
         var report = await CheckOnceAsync(services, ct);
         if (services.Contains(Service.Telegram))
-            report = report with { TelegramClients = FindTelegramClients() };
+            report = report with { TelegramClients = FindTelegramClients(), TelegramAppRunning = Zapret.TelegramClients.DesktopRunning() };
 
         var failed = services.Where(s => !report[s]).ToList();
         if (failed.Count == 0 || !report.InternetOk)
@@ -102,6 +110,7 @@ public sealed class HealthChecker : IHealthProbe
             Services = merged,
             Problems = problems,
             AiCountry = retry.AiCountry ?? report.AiCountry,
+            AiExitIp = retry.AiCountry is not null ? retry.AiExitIp : report.AiExitIp,
         };
     }
 
@@ -127,36 +136,41 @@ public sealed class HealthChecker : IHealthProbe
         return new HealthReport(checks.ToDictionary(c => c.Key, c => c.Value.Result.Problem is null), control.Result is null)
         {
             AiCountry = checks.TryGetValue(Service.Ai, out var ai) ? ai.Result.Country : null,
+            AiExitIp = ai?.Result.ExitIp,
             Problems = problems,
         };
     }
 
-    private async Task<(string? Problem, string? Country)> CheckServiceAsync(HttpClient http, Service service, CancellationToken ct)
+    private async Task<(string? Problem, string? Country, string? ExitIp)> CheckServiceAsync(HttpClient http, Service service, CancellationToken ct)
     {
         switch (service)
         {
             case Service.Telegram:
                 if (_telegramSecret is null)
-                    return (await TelegramProxy.IsPortOpenAsync(ct) ? null : "прокси не запущен", null);
+                    return (await TelegramProxy.IsPortOpenAsync(ct) ? null : "прокси не запущен", null, null);
                 return (await TelegramProbe.CheckAsync(TelegramProxy.Host, TelegramProxy.Port, _telegramSecret,
-                    TelegramDc, Timeout, ct), null);
+                    TelegramDc, Timeout, ct), null, null);
 
             case Service.Ai:
                 var (trace, problem) = await GetStringAsync(http, AiTraceUrl, ct);
                 var country = trace is null ? null : ParseTraceCountry(trace);
                 if (problem is not null)
-                    return ($"chatgpt.com: {problem}", null);
+                    return ($"chatgpt.com: {problem}", null, null);
+                var exitIp = trace is null ? null : ParseTraceIp(trace);
+                // Страна RU — либо запрос прошёл мимо VPN, либо сам сервер VPN выходит в интернет из России:
+                // по внешнему IP в отчёте видно, что из двух
                 return IsAiCountryOk(country)
-                    ? (null, country)
-                    : ($"ChatGPT видит запрос из страны {country ?? "?"} — значит, мимо VPN", country);
+                    ? (null, country, exitIp)
+                    : ($"ChatGPT видит запрос из страны {country ?? "?"} (внешний IP {exitIp ?? "?"}) — мимо VPN или сервер VPN в этой стране",
+                        country, exitIp);
         }
 
         if (!Targets.TryGetValue(service, out var urls))
-            return ("неизвестный сервис", null);
+            return ("неизвестный сервис", null, null);
 
         var results = await Task.WhenAll(urls.Select(async u => (Url: u, Problem: await OpenAsync(http, u, ct))));
         var failed = results.Where(r => r.Problem is not null).ToList();
-        return (failed.Count == 0 ? null : string.Join("; ", failed.Select(f => $"{new Uri(f.Url).Host}: {f.Problem}")), null);
+        return (failed.Count == 0 ? null : string.Join("; ", failed.Select(f => $"{new Uri(f.Url).Host}: {f.Problem}")), null, null);
     }
 
     /// <summary>Null — открылся, иначе — коротко, что пошло не так.</summary>
@@ -209,6 +223,10 @@ public sealed class HealthChecker : IHealthProbe
             return null;
         }
     }
+
+    internal static string? ParseTraceIp(string trace) => trace.Split('\n')
+        .Select(l => l.Trim()).Where(l => l.StartsWith("ip=", StringComparison.Ordinal))
+        .Select(l => l[3..]).FirstOrDefault(ip => IPAddress.TryParse(ip, out _));
 
     internal static string? ParseTraceCountry(string trace) => trace
         .Split('\n')

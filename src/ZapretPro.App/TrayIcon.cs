@@ -106,24 +106,42 @@ public sealed class TrayIcon : IDisposable
         }
     }
 
-    /// <summary>Рисуем кружок нужного цвета прямо в программе — без отдельных файлов-иконок.</summary>
+    /// <summary>
+    /// Значок как у программы — фиолетовый кружок с кнопкой питания (серый, если выключено) — и точка
+    /// состояния в углу. Рисуем прямо в программе: так он одинаково чёткий на любом масштабе экрана.
+    /// </summary>
     private static Icon MakeIcon(AppEngine.Overall state)
     {
-        var color = state switch
+        Color? dotColor = state switch
         {
             AppEngine.Overall.Ok => Color.FromArgb(0x22, 0xC5, 0x5E),
             AppEngine.Overall.Busy => Color.FromArgb(0xF5, 0x9E, 0x0B),
             AppEngine.Overall.Problem => Color.FromArgb(0xEF, 0x44, 0x44),
-            _ => Color.FromArgb(0x94, 0xA3, 0xB8),
+            _ => null,
         };
+        var on = state != AppEngine.Overall.Off;
         using var bitmap = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bitmap))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using var ring = new SolidBrush(Color.FromArgb(0x0B, 0x11, 0x20));
-            g.FillEllipse(ring, 1, 1, 30, 30);
-            using var dot = new SolidBrush(color);
-            g.FillEllipse(dot, 5, 5, 22, 22);
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            var circle = new RectangleF(1, 1, 30, 30);
+            using var face = new LinearGradientBrush(circle,
+                on ? Color.FromArgb(0xB3, 0x8C, 0xFF) : Color.FromArgb(0x94, 0xA3, 0xB8),
+                on ? Color.FromArgb(0x4C, 0x1D, 0x95) : Color.FromArgb(0x33, 0x41, 0x55), 45f);
+            g.FillEllipse(face, circle);
+
+            using var pen = new Pen(Color.White, 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawArc(pen, 8.5f, 9.5f, 15f, 15f, -50, 280);
+            g.DrawLine(pen, 16f, 6.5f, 16f, 15f);
+
+            if (dotColor is { } color)
+            {
+                using var rim = new SolidBrush(Color.FromArgb(0x0B, 0x11, 0x20));
+                g.FillEllipse(rim, 19, 19, 13, 13);
+                using var dot = new SolidBrush(color);
+                g.FillEllipse(dot, 21, 21, 9, 9);
+            }
         }
         return Icon.FromHandle(bitmap.GetHicon());
     }

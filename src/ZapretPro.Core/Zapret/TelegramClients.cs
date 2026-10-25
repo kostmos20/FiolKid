@@ -12,6 +12,19 @@ namespace ZapretPro.Core.Zapret;
 /// </summary>
 public static class TelegramClients
 {
+    // Telegram Desktop и его известные копии с другим названием
+    private static readonly string[] DesktopNames =
+        ["Telegram", "AyuGram", "Kotatogram", "64Gram", "Materialgram", "Forkgram", "Unigram"];
+
+    /// <summary>Запущен ли хоть один Telegram: если нет, «не подключён к прокси» — просто закрыт, а не поломка.</summary>
+    public static bool DesktopRunning() => DesktopNames.Any(name =>
+    {
+        var processes = Process.GetProcessesByName(name);
+        foreach (var p in processes)
+            p.Dispose();
+        return processes.Length > 0;
+    });
+
     /// <summary>Имена процессов, подключённых к прокси (кроме самого прокси и нашей программы).</summary>
     public static IReadOnlyList<string> ConnectedTo(int port) => ConnectedTo(port, includeSelf: false);
 

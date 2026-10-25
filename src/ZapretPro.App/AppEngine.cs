@@ -18,8 +18,18 @@ public enum ServiceLook
     NotWorking,
     /// <summary>Telegram: прокси готов, но сам Telegram к нему ещё не подключили.</summary>
     NeedsConnect,
+    /// <summary>Telegram: прокси готов, а сам Telegram просто закрыт — это не поломка.</summary>
+    AppClosed,
     /// <summary>Нейросети: нужен ключ (или вставленный не подходит).</summary>
     NeedsKey,
+}
+
+/// <summary>Что вставляют: ключ Amnezia, ссылку-подписку или «что угодно — разберись сам».</summary>
+public enum CredentialKind
+{
+    Any,
+    Amnezia,
+    Subscription,
 }
 
 /// <summary>
@@ -36,6 +46,7 @@ public sealed class AppEngine
     private readonly VpnController _vpn;
     private readonly Watchdog _watchdog;
     private readonly ListUpdater _lists;
+    private readonly FileLog _fileLog = new();
     private readonly List<string> _log = [];
     private CancellationTokenSource? _cts;
     private Task? _run;
@@ -69,7 +80,7 @@ public sealed class AppEngine
         var dns = new DnsHijack(VpnManager.TunnelName);
         dns.Log += Write;
         _amnezia = new AmneziaProfile(Keys, new VpnManager());
-        _subscription = new SubscriptionProfile(Subscriptions, _subscriptionClient, new SingBoxTunnel());
+        _subscription = new SubscriptionProfile(Subscriptions, _subscriptionClient, new SingBoxTunnel(), null, _settings, new ServerBenchmark());
         _subscription.Log += Write;
         _vpn = new VpnController([_amnezia, _subscription],
             () => new Router(RouteLists.Load(vpnDir, updatedDir,
@@ -77,7 +88,8 @@ public sealed class AppEngine
             routes, dns, _settings);
         _vpn.Log += Write;
 
-        _watchdog = new Watchdog(_zapret, Telegram, _vpn, new HealthChecker(secret), _settings);
+        var checker = new HealthChecker(secret);
+        _watchdog = new Watchdog(_zapret, Telegram, _vpn, checker, _settings, speed: checker);
         _watchdog.StatusChanged += s =>
         {
             Status = s;
@@ -160,6 +172,20 @@ public sealed class AppEngine
         StatusChanged?.Invoke();
     }
 
+    /// <summary>Перезапустить прокси Telegram и снова предложить Telegram подключиться к нему.</summary>
+    public async Task RestartTelegramAsync()
+    {
+        if (_cts is not { IsCancellationRequested: false } cts)
+            return;
+        try
+        {
+            await Task.Run(() => _watchdog.RestartTelegramAsync(cts.Token));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     public async Task CheckNowAsync()
     {
         if (_cts is not { IsCancellationRequested: false } cts)
@@ -178,10 +204,22 @@ public sealed class AppEngine
     /// ссылку-подписку сначала скачивает и проверяет, что в ней есть подходящие серверы. Прежнее
     /// заменяется только после успешной проверки. Возвращает, что сохранено — для подсказки.
     /// </summary>
-    public async Task<string> SaveKeyAsync(string text)
+    /// <param name="expected">
+    /// Куда вставляют: в поле «Ключ Amnezia», «Подписка» или куда угодно (кнопка на главной). Если вставили
+    /// не туда — не сохраняем, а говорим, куда это вставить: так ключи разных сервисов не перепутаются.
+    /// </param>
+    public async Task<string> SaveKeyAsync(string text, CredentialKind expected = CredentialKind.Any)
     {
         var trimmed = text.Trim();
-        if (trimmed.StartsWith(KeyParser.Prefix, StringComparison.OrdinalIgnoreCase))
+        var isKey = trimmed.StartsWith(KeyParser.Prefix, StringComparison.OrdinalIgnoreCase);
+        if (expected == CredentialKind.Subscription && isKey)
+            throw new KeyParseException("Это ключ Amnezia (vpn://…), а не ссылка-подписка — вставь его кнопкой «Вставить ключ».");
+        if (expected == CredentialKind.Amnezia && !isKey)
+            throw new KeyParseException(SubscriptionClient.LooksLikeSubscription(trimmed)
+                ? "Это ссылка-подписка, а не ключ Amnezia — вставь её кнопкой «Вставить ссылку»."
+                : "Это не ключ Amnezia. Ключ начинается с vpn:// — скопируй его целиком из сообщения.");
+
+        if (isKey)
         {
             AwgConfig.FromKey(KeyParser.Parse(trimmed));
             var parsed = Keys.Save(trimmed);
@@ -292,9 +330,10 @@ public sealed class AppEngine
         if (!report[service])
             return ServiceLook.NotWorking;
 
-        // Прокси исправен, но Telegram к нему не подключён — значит, у человека Telegram не работает
+        // Прокси исправен, но Telegram к нему не подключён: если Telegram открыт — он не работает,
+        // если закрыт — всё в порядке, просто подключится при запуске (или после «Подключить»)
         if (service == Service.Telegram && report.TelegramClients is { Count: 0 })
-            return ServiceLook.NeedsConnect;
+            return report.TelegramAppRunning ? ServiceLook.NeedsConnect : ServiceLook.AppClosed;
 
         return ServiceLook.Working;
     }
@@ -328,16 +367,41 @@ public sealed class AppEngine
         sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}");
         sb.AppendLine($"VPN через: {s.Vpn.Profile ?? "—"}; {KeyState().Text}; {SubscriptionState().Text}");
         if (_vpn.Unstable)
-            sb.AppendLine("VPN работает с перебоями: запросы через туннель часто теряются (возможно, ключ включён на другом устройстве)");
+            sb.AppendLine("DNS через VPN часто не отвечает: запросы через туннель теряются (бывает, когда ключ включён ещё на одном устройстве или сервер режет UDP)");
         foreach (var service in Enum.GetValues<Service>())
             sb.AppendLine($"{service}: {Look(service)}{(s.LastReport?.Problems.TryGetValue(service, out var p) == true ? $" — {p}" : "")}");
         if (s.LastReport is { } r)
-            sb.AppendLine($"Интернет: {(r.InternetOk ? "есть" : "нет")}; нейросети видят страну: {r.AiCountry ?? "—"}; " +
+            sb.AppendLine($"Интернет: {(r.InternetOk ? "есть" : "нет")}; ChatGPT видит: страна {r.AiCountry ?? "—"}, внешний IP {r.AiExitIp ?? "—"}; " +
                           $"к прокси Telegram подключены: {(r.TelegramClients is null ? "?" : string.Join(", ", r.TelegramClients))}");
+        if (s.LastReport is { } tr)
+            sb.AppendLine($"Telegram Desktop запущен: {(tr.TelegramAppRunning ? "да" : "нет")}; прокси Telegram работает: {(s.TelegramRunning ? "да" : "нет")}");
         if (s.LastError is not null)
             sb.AppendLine($"Ошибка: {s.LastError}");
         if (s.Vpn.Error is not null)
             sb.AppendLine($"VPN: {s.Vpn.Error}");
+
+        var settings = _settings.Load();
+        sb.AppendLine($"Выбор альта: {settings.EffectiveStrategyMode switch
+        {
+            StrategyModes.Fastest => "самый быстрый",
+            StrategyModes.Manual => $"вручную «{settings.ManualStrategyId}»",
+            _ => "первый рабочий",
+        }}; выбор сервера подписки: {(settings.ServerAutoSelect == false ? "вручную" : "самый быстрый")}" +
+                      (ChosenServers.Count > 0 ? $"; подключено через: {string.Join(", ", ChosenServers)}" : ""));
+        if (settings.StrategyBenchmark is { Count: > 0 } bench)
+        {
+            sb.AppendLine($"--- замер альтов ({settings.StrategyBenchmarkAt?.ToLocalTime():dd.MM HH:mm}) ---");
+            foreach (var e in bench.OrderByDescending(b => b.Ok).ThenBy(b => b.Milliseconds < 0 ? double.MaxValue : b.Milliseconds))
+                sb.AppendLine($"{e.Id}: {e.Ok} из {e.Total}, {(e.Milliseconds < 0 ? "не запустился" : $"{e.Milliseconds / 1000:0.0} с")}");
+        }
+        if (settings.ServerBenchmark is { Count: > 0 } servers)
+        {
+            sb.AppendLine($"--- замер серверов подписки ({settings.ServerBenchmarkAt?.ToLocalTime():dd.MM HH:mm}) ---");
+            foreach (var e in servers)
+                sb.AppendLine($"«{e.Name}» {e.Protocol}: " + (e.Works
+                    ? $"{e.PingMs} мс{(e.Mbps is { } m ? $", {m} Мбит/с" : "")}{(e.Country is { } c ? $", выход {c}" : "")}"
+                    : e.Problem ?? "не отвечает"));
+        }
         sb.AppendLine("--- журнал ---");
         foreach (var line in Log)
             sb.AppendLine(line);
@@ -357,13 +421,24 @@ public sealed class AppEngine
     public async Task<string> BuildFullReportAsync()
     {
         var report = BuildReport();
-        if (!IsOn || !Keys.HasKey)
+        var marker = "--- журнал ---";
+        try
+        {
+            var system = await Task.Run(() => SystemDiagnostics.Build(VpnManager.TunnelName, AppPaths.InstallDir));
+            var block = $"--- система ---{Environment.NewLine}{system}{Environment.NewLine}";
+            var at = report.IndexOf(marker, StringComparison.Ordinal);
+            report = at < 0 ? report + block : report.Insert(at, block);
+        }
+        catch (Exception e)
+        {
+            report += $"--- система ---{Environment.NewLine}не собрать: {e.Message}{Environment.NewLine}";
+        }
+        if (!IsOn || !HasVpnCredentials)
             return report;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
-            var sites = await SiteProbe.RunAsync(_vpn.CurrentRoutes, cts.Token);
-            var marker = "--- журнал ---";
+            var sites = await SiteProbe.RunAsync(() => _vpn.CurrentRoutes, cts.Token);
             var at = report.IndexOf(marker, StringComparison.Ordinal);
             var recent = _vpn.RecentDns;
             var block = $"--- сайты через VPN ---{Environment.NewLine}{sites}{Environment.NewLine}" +
@@ -430,6 +505,9 @@ public sealed class AppEngine
         }
     }
 
+    /// <summary>Запись в журнал снаружи движка (окно, запуск).</summary>
+    public void Note(string message) => Write(message);
+
     private void Write(string message)
     {
         var line = $"{DateTime.Now:HH:mm:ss}  {message}";
@@ -439,6 +517,124 @@ public sealed class AppEngine
             if (_log.Count > MaxLogLines)
                 _log.RemoveRange(0, _log.Count - MaxLogLines);
         }
+        _fileLog.Write(line);
         LogAdded?.Invoke(line);
+    }
+
+    // ---------- Альты zapret ----------
+
+    public IReadOnlyList<string> StrategyIds
+    {
+        get
+        {
+            try
+            {
+                return _zapret.Strategies.Select(s => s.Id).ToList();
+            }
+            catch (InvalidDataException)
+            {
+                return [];
+            }
+        }
+    }
+
+    public AppSettings Settings => _settings.Load();
+
+    /// <summary>Сменить режим выбора альта. Если программа включена — применяется сразу.</summary>
+    public void SetStrategyMode(string mode, string? manualId)
+    {
+        _settings.Update(s =>
+        {
+            s.StrategyMode = mode;
+            if (manualId is not null)
+                s.ManualStrategyId = manualId;
+        });
+        Write(mode switch
+        {
+            StrategyModes.Fastest => "Альт: выбирать самый быстрый",
+            StrategyModes.Manual => $"Альт: вручную «{manualId ?? _settings.Load().ManualStrategyId}»",
+            _ => "Альт: первый рабочий",
+        });
+        if (_cts is { IsCancellationRequested: false } cts)
+            _ = Task.Run(() => _watchdog.ApplyStrategySettingsAsync(cts.Token));
+    }
+
+    /// <summary>Замерить скорость всех альтов сейчас (пару минут YouTube и Discord будут подтормаживать).</summary>
+    public async Task BenchmarkStrategiesAsync()
+    {
+        if (_cts is not { IsCancellationRequested: false } cts)
+            return;
+        try
+        {
+            await Task.Run(() => _watchdog.BenchmarkAsync(cts.Token));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    // ---------- Серверы подписки ----------
+
+    /// <summary>Серверы подписки с последним замером (если был) — для настроек. Без адресов и паролей.</summary>
+    public IReadOnlyList<(ProxyServer Server, ServerScore? Score)> Servers()
+    {
+        var cache = Subscriptions.LoadCache();
+        if (cache is null)
+            return [];
+        var scores = (_settings.Load().ServerBenchmark ?? []).ToDictionary(s => s.Key);
+        return SubscriptionParser.Parse(cache.Body, cache.Headers).Servers
+            .Select(s => (s, scores.GetValueOrDefault(s.Key)))
+            .OrderByDescending(x => x.Item2?.Score ?? -1)
+            .ToList();
+    }
+
+    public bool MeasuringServers => _subscription.Measuring;
+
+    /// <summary>Через какие серверы подписки сейчас подключено.</summary>
+    public IReadOnlyList<string> ChosenServers => _subscription.ChosenNames;
+
+    public void SetServerChoice(bool auto, string? manualKey)
+    {
+        _settings.Update(s =>
+        {
+            s.ServerAutoSelect = auto;
+            if (manualKey is not null)
+                s.ManualServerKey = manualKey;
+        });
+        Write(auto ? "Сервер подписки: выбирать самый быстрый" : "Сервер подписки: выбран вручную");
+        AfterCredentialsChanged();
+    }
+
+    public async Task MeasureServersAsync()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var scores = await Task.Run(() => _subscription.MeasureNowAsync(cts.Token));
+        if (scores is not null)
+            AfterCredentialsChanged(); // переподключиться к новым лучшим серверам
+    }
+
+    // ---------- Запуск с Windows и отчёты ----------
+
+    public bool AutostartEnabled => Autostart.IsEnabled();
+
+    /// <summary>Null — получилось, иначе текст ошибки.</summary>
+    public string? SetAutostart(bool enabled)
+    {
+        var error = enabled ? Autostart.Enable(Environment.ProcessPath!) : Autostart.Disable();
+        Write(error is null ? (enabled ? "Запуск вместе с Windows включён" : "Запуск вместе с Windows выключен")
+            : $"Не удалось изменить запуск с Windows: {error}");
+        return error;
+    }
+
+    public string LogFolder => _fileLog.Directory;
+
+    /// <summary>Сохранить полный отчёт файлом на рабочий стол — если скопировать не получается. Возвращает путь.</summary>
+    public async Task<string> SaveReportAsync()
+    {
+        var report = await BuildFullReportAsync();
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            $"FiolKid-отчёт-{DateTime.Now:yyyy-MM-dd-HHmm}.txt");
+        await File.WriteAllTextAsync(path, report, Encoding.UTF8);
+        return path;
     }
 }

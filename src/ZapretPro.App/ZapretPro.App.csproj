@@ -11,7 +11,8 @@
     <AssemblyName>FiolKid</AssemblyName>
     <RootNamespace>ZapretPro.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.7.1</Version>
+    <ApplicationIcon>Assets\fiolkid.ico</ApplicationIcon>
+    <Version>0.8.0</Version>
     <Product>FiolKid</Product>
   </PropertyGroup>
 
@@ -30,6 +31,12 @@
   <ItemGroup>
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <!-- Значок программы: tools\make-icon.ps1 -->
+  <ItemGroup>
+    <Resource Include="Assets\fiolkid.ico" />
+    <Resource Include="Assets\fiolkid-256.png" />
   </ItemGroup>
 
   <ItemGroup>

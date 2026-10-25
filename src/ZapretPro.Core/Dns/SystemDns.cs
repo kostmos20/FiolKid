@@ -10,9 +10,8 @@ namespace ZapretPro.Core.Dns;
 
 /// <summary>
 /// Переключает DNS Windows на наш (127.0.0.1 / ::1) и возвращает прежний.
-/// Прежние настройки сохраняются в файл до изменения: если программа упадёт, при следующем запуске
-/// она вернёт их первым делом. Вторым DNS остаётся прежний IPv4-сервер — если наш DNS не ответит,
-/// Windows через секунду спросит его, и интернет не пропадёт.
+/// Прежние настройки сохраняются в файл до изменения: если программа упадёт, их вернёт сторожевой
+/// процесс (--dns-guard), а не успеет он — следующий запуск, первым делом.
 /// </summary>
 public sealed class SystemDns
 {
@@ -54,13 +53,9 @@ public sealed class SystemDns
 
         foreach (var adapter in adapters)
         {
-            var fallback = adapter.EffectiveServers
-                .Select(IPAddress.Parse)
-                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a));
-
+            // Только наш: второй DNS провайдера Windows спросила бы напрямую, если наш задумался,
+            // и сайт из списков получил бы адрес без маршрута в VPN. Провайдера спрашивает наш DNS сам
             await NetshAsync($"interface ipv4 set dnsservers name=\"{adapter.Name}\" source=static address=127.0.0.1 register=primary validate=no");
-            if (fallback is not null)
-                await NetshAsync($"interface ipv4 add dnsservers name=\"{adapter.Name}\" address={fallback} index=2 validate=no");
             // IPv6-DNS тоже на наш, иначе Windows спрашивала бы его мимо нас
             await NetshAsync($"interface ipv6 set dnsservers name=\"{adapter.Name}\" source=static address=::1 register=primary validate=no",
                 quietOnError: true);

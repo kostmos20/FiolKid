@@ -70,6 +70,56 @@ public sealed class WatchdogTests : IDisposable
     }
 
     [Fact]
+    public async Task Manual_strategy_is_used_alone_and_missing_services_go_through_vpn()
+    {
+        _zapret.Works("ALT", youtube: true, discord: false);
+        _zapret.Works("ALT3");
+        _settings.Update(s =>
+        {
+            s.StrategyMode = StrategyModes.Manual;
+            s.ManualStrategyId = "ALT";
+        });
+
+        await _watchdog.StartAsync(default);
+
+        Assert.Equal(["ALT"], _zapret.Started);
+        Assert.Equal(ZapretState.Partial, State);
+        Assert.Contains(Service.Discord, _watchdog.Status.ViaVpn);
+
+        // И при проверках не уходит на другой альт, хотя ALT3 открыл бы всё
+        _zapret.Breaks("ALT");
+        await _watchdog.CheckAsync(default);
+        await _watchdog.CheckAsync(default);
+        Assert.DoesNotContain("ALT3", _zapret.Started);
+    }
+
+    [Fact]
+    public async Task Fastest_mode_measures_every_strategy_and_keeps_the_quickest_working_one()
+    {
+        var speed = new FakeSpeed(_zapret) { ["general"] = (4, 9000), ["ALT"] = (2, 1000), ["ALT2"] = (4, 2500), ["ALT3"] = (4, 4000) };
+        var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
+            new WatchdogOptions { WarmUp = TimeSpan.Zero }, _time, speed);
+        _zapret.Works("general", "ALT2", "ALT3");
+        _zapret.Works("ALT", youtube: true, discord: false);
+        _settings.Update(s => s.StrategyMode = StrategyModes.Fastest);
+
+        await watchdog.StartAsync(default);
+
+        Assert.Equal(["general", "ALT", "ALT2", "ALT3", "ALT2"], _zapret.Started);
+        Assert.Equal("ALT2", _zapret.Current);
+        Assert.Equal(ZapretState.Working, watchdog.Status.State);
+        var saved = _settings.Load();
+        Assert.Equal("ALT2", saved.LastStrategyId);
+        Assert.Equal(4, saved.StrategyBenchmark!.Count);
+
+        // Свежий замер не повторяется при следующем запуске
+        await watchdog.StopAsync(default);
+        _zapret.Started.Clear();
+        await watchdog.StartAsync(default);
+        Assert.Equal(["ALT2"], _zapret.Started);
+    }
+
+    [Fact]
     public async Task Startup_starts_telegram_proxy()
     {
         _zapret.Works("general");
@@ -535,6 +585,13 @@ public sealed class WatchdogTests : IDisposable
             });
             return Task.FromResult(new HealthReport(results, Internet));
         }
+    }
+
+    /// <summary>Замер скорости: сколько адресов из 4 открыл альт и за сколько миллисекунд.</summary>
+    private sealed class FakeSpeed(FakeZapret zapret) : Dictionary<string, (int Ok, double Ms)>, IZapretSpeedProbe
+    {
+        public Task<(int Ok, int Total, double Milliseconds)> MeasureZapretAsync(CancellationToken ct) =>
+            Task.FromResult(zapret.Current is { } id && TryGetValue(id, out var r) ? (r.Ok, 4, r.Ms) : (0, 4, 48000.0));
     }
 
     private sealed class FakeTime : TimeProvider

@@ -321,11 +321,13 @@ public sealed class VpnController : IVpn
                 if (_activeSets.Contains(set))
                     add.Add(ip);
             }
-        }
-        if (_runningConf is not null)
-        {
-            foreach (var ip in add)
-                _routes.Add(new IPNetwork(ip, 32));
+            // Под той же блокировкой, что и сверка маршрутов: иначе сверка, начатая чуть раньше,
+            // удалила бы только что добавленный маршрут как «лишний»
+            if (_runningConf is not null)
+            {
+                foreach (var ip in add)
+                    _routes.Add(new IPNetwork(ip, 32));
+            }
         }
         return Task.CompletedTask;
     }
@@ -347,8 +349,8 @@ public sealed class VpnController : IVpn
                 if (_activeSets.Contains(set) && !_endpoints.Contains(ip) && !wanted.Any(n => n.Contains(ip)))
                     wanted.Add(new IPNetwork(ip, 32));
             }
+            _routes.Sync(wanted);
         }
-        _routes.Sync(wanted);
     }
 
     private async Task EnsureDnsAsync(HashSet<RouteSet> sets)

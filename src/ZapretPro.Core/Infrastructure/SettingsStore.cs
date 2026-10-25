@@ -18,7 +18,43 @@ public sealed class AppSettings
 
     /// <summary>Какой способ VPN оказался быстрее, если вставлено несколько (имя профиля).</summary>
     public string? PreferredVpn { get; set; }
+
+    /// <summary>Как выбирать способ обхода zapret (альт): см. <see cref="StrategyModes"/>. Null — «самый быстрый».</summary>
+    public string? StrategyMode { get; set; }
+
+    /// <summary>Режим с учётом умолчания: человек просил, чтобы программа сама брала самый быстрый альт.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string EffectiveStrategyMode => StrategyMode ?? StrategyModes.Fastest;
+
+    /// <summary>Альт, выбранный вручную (режим «manual»).</summary>
+    public string? ManualStrategyId { get; set; }
+
+    /// <summary>Последний замер скорости альтов: когда и что показал каждый.</summary>
+    public DateTimeOffset? StrategyBenchmarkAt { get; set; }
+    public List<StrategyBenchmarkEntry>? StrategyBenchmark { get; set; }
+
+    /// <summary>Подписка: выбирать сервер замером скорости (true, по умолчанию) или брать выбранный вручную.</summary>
+    public bool? ServerAutoSelect { get; set; }
+
+    /// <summary>Сервер подписки, выбранный вручную, — по отпечатку <c>ProxyServer.Key</c> (без адреса и пароля).</summary>
+    public string? ManualServerKey { get; set; }
+
+    /// <summary>Последний замер серверов подписки (без адресов и паролей).</summary>
+    public DateTimeOffset? ServerBenchmarkAt { get; set; }
+    public List<Vpn.ServerScore>? ServerBenchmark { get; set; }
 }
+
+public static class StrategyModes
+{
+    /// <summary>Перебор по порядку, оставляем первый, при котором всё открылось (как было всегда).</summary>
+    public const string FirstWorking = "auto";
+    /// <summary>Замеряем все альты и берём самый быстрый из рабочих.</summary>
+    public const string Fastest = "fastest";
+    /// <summary>Только выбранный человеком альт, без перебора.</summary>
+    public const string Manual = "manual";
+}
+
+public sealed record StrategyBenchmarkEntry(string Id, int Ok, int Total, double Milliseconds);
 
 /// <summary>Настройки в JSON-файле. Битый или отсутствующий файл — просто настройки по умолчанию.</summary>
 public sealed class SettingsStore

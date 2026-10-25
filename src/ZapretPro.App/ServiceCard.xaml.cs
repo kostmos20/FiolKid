@@ -42,6 +42,8 @@ public partial class ServiceCard : UserControl
 
     public event RoutedEventHandler? ActionClick;
 
+    private ServiceLook? _shown;
+
     public void Show(ServiceLook look, string? action = null)
     {
         var (text, brush) = look switch
@@ -51,11 +53,23 @@ public partial class ServiceCard : UserControl
             ServiceLook.Working => ("Работает", "GreenBrush"),
             ServiceLook.NotWorking => ("Не работает", "RedBrush"),
             ServiceLook.NeedsConnect => ("Нужно подключить", "AmberBrush"),
+            ServiceLook.AppClosed => ("Telegram закрыт", "LavenderBrush"),
             ServiceLook.NeedsKey => ("Нужен ключ", "AmberBrush"),
             _ => ("—", "GrayBrush"),
         };
         StatusText.Text = text;
         Dot.Fill = (Brush)FindResource(brush);
+
+        // Пока проверяю — точка мерцает; в остальное время горит ровно
+        if (look == ServiceLook.Checking && _shown != ServiceLook.Checking)
+            Dot.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(1, 0.25, TimeSpan.FromSeconds(0.7))
+            {
+                AutoReverse = true,
+                RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+            });
+        else if (look != ServiceLook.Checking)
+            Dot.BeginAnimation(OpacityProperty, null);
+        _shown = look;
 
         ActionButton.Content = action;
         ActionButton.Visibility = action is null ? Visibility.Collapsed : Visibility.Visible;

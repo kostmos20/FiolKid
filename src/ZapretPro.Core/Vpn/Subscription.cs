@@ -16,6 +16,13 @@ public sealed record ProxyServer(string Protocol, string Host, int Port, string 
         _ => 3,
     };
 
+    /// <summary>
+    /// Постоянный отпечаток сервера — чтобы запомнить выбор и результаты замера, не храня адрес открыто.
+    /// Тот же сервер в обновлённом списке подписки даёт тот же отпечаток.
+    /// </summary>
+    public string Key => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+        Encoding.UTF8.GetBytes($"{Protocol}|{Host}|{Port}|{Name}")))[..16].ToLowerInvariant();
+
     /// <summary>Без адреса и ключей — для журнала.</summary>
     public override string ToString() => $"{Protocol} «{Name}»";
 }
