@@ -82,6 +82,7 @@ FiolKid — оболочка над чужими открытыми проект
 | sing-box | SagerNet | [sing-box](https://github.com/SagerNet/sing-box) (GPL-3.0) |
 | WinDivert | basil00 | [WinDivert](https://github.com/basil00/WinDivert) |
 | Список заблокированных сайтов | itdoginfo | [allow-domains](https://github.com/itdoginfo/allow-domains) |
+| Контурные логотипы сервисов | Paweł Kuna | [Tabler Icons](https://github.com/tabler/tabler-icons) (MIT) |
 
 Компоненты распространяются по своим лицензиям — они указаны на страницах проектов по ссылкам выше
 (лицензия sing-box лежит и в сборке, в папке `sing-box`). Программа бесплатная и не продаётся.

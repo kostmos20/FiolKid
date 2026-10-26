@@ -89,6 +89,8 @@ public partial class ServiceCard : UserControl
         var off = look == ServiceLook.Off;
         GlowColor.Color = Color.FromArgb(0xD0, _accent.R, _accent.G, _accent.B);
         _logoBrush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(off ? Gray : _accent, duration));
+        LogoGlow.Color = _accent;
+        LogoGlow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.OpacityProperty, new DoubleAnimation(off ? 0 : 0.9, duration));
         ServiceLogos.Twinkle(_stars, !off);
 
         // Пока проверяю — точка мигает, а сияние «дышит»; в остальное время горят ровно

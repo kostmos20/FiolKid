@@ -36,7 +36,12 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Orientation="Horizontal">
-                    <Viewbox x:Name="LogoBox" Width="38" Height="38" VerticalAlignment="Center"/>
+                    <!-- Логотип-«неоновая трубка»: тонкая линия с мягким свечением своего цвета -->
+                    <Viewbox x:Name="LogoBox" Width="38" Height="38" VerticalAlignment="Center">
+                        <Viewbox.Effect>
+                            <DropShadowEffect x:Name="LogoGlow" ShadowDepth="0" BlurRadius="10" Opacity="0" Color="#FFEF4444"/>
+                        </Viewbox.Effect>
+                    </Viewbox>
                     <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                         <TextBlock x:Name="TitleText" FontSize="19" FontWeight="SemiBold"/>
                         <TextBlock x:Name="SubtitleText" FontSize="13" Foreground="{StaticResource MutedBrush}"
