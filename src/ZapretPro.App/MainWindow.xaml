@@ -113,8 +113,8 @@
                             </Image>
                         </Canvas>
 
-                        <!-- Чёткая радужная обводка кнопки, вращается быстрее воронки -->
-                        <Ellipse x:Name="RainbowRing" Width="196" Height="196" StrokeThickness="3.5" Opacity="0.6"
+                        <!-- Чёткая радужная обводка кнопки вплотную к ней, вращается быстрее воронки -->
+                        <Ellipse x:Name="RainbowRing" Width="190" Height="190" StrokeThickness="6" Opacity="0.7"
                                  IsHitTestVisible="False" RenderTransformOrigin="0.5,0.5">
                             <Ellipse.RenderTransform>
                                 <RotateTransform/>
@@ -143,7 +143,8 @@
                             </Ellipse.RenderTransform>
                         </Ellipse>
 
-                        <Button x:Name="PowerButton" Width="190" Height="190" Cursor="Hand" Click="Power_Click"
+                        <!-- Сама кнопка: ровный тёмный круг внутри радужной обводки, белый значок питания -->
+                        <Button x:Name="PowerButton" Width="179" Height="179" Cursor="Hand" Click="Power_Click"
                                 ToolTip="Включить или выключить" RenderTransformOrigin="0.5,0.5">
                             <Button.RenderTransform>
                                 <ScaleTransform/>
@@ -151,43 +152,18 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Grid>
-                                        <Ellipse x:Name="Glow" Fill="#FF1A2233" Stroke="#FF2A3550" StrokeThickness="2">
-                                            <Ellipse.Effect>
-                                                <DropShadowEffect BlurRadius="60" ShadowDepth="0" Opacity="0.0" Color="#FF8B5CF6"/>
-                                            </Ellipse.Effect>
-                                        </Ellipse>
-                                        <Ellipse x:Name="Face" Margin="14">
-                                            <Ellipse.Fill>
-                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                    <GradientStop x:Name="FaceTop" Color="#FF334155" Offset="0"/>
-                                                    <GradientStop x:Name="FaceBottom" Color="#FF1E293B" Offset="1"/>
-                                                </LinearGradientBrush>
-                                            </Ellipse.Fill>
-                                        </Ellipse>
-                                        <!-- Блик сверху — объём -->
-                                        <Ellipse Margin="44,20,44,118" IsHitTestVisible="False">
-                                            <Ellipse.Fill>
-                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                                    <GradientStop Color="#1FFFFFFF" Offset="0"/>
-                                                    <GradientStop Color="#00FFFFFF" Offset="1"/>
-                                                </LinearGradientBrush>
-                                            </Ellipse.Fill>
-                                        </Ellipse>
+                                        <Ellipse x:Name="Face" Fill="#FF1E293B"/>
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Face" Property="Opacity" Value="0.92"/>
+                                            <Setter TargetName="Face" Property="Fill" Value="#FF243247"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
-                            <StackPanel>
-                                <TextBlock Text="&#xE7E8;" FontFamily="{StaticResource IconFont}" FontSize="56"
-                                           HorizontalAlignment="Center" Foreground="White"/>
-                                <TextBlock x:Name="PowerLabel" Text="ВКЛЮЧИТЬ" FontSize="17" FontWeight="Bold" Margin="0,10,0,0"
-                                           HorizontalAlignment="Center" Foreground="White"/>
-                            </StackPanel>
+                            <TextBlock x:Name="PowerIcon" Text="&#xE7E8;" FontFamily="{StaticResource IconFont}" FontSize="62"
+                                       HorizontalAlignment="Center" Foreground="White"/>
                         </Button>
                     </Grid>
 

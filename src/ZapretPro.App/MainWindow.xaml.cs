@@ -19,7 +19,7 @@ public partial class MainWindow : Window
     private readonly Storyboard _aurora;
     private bool _busy;
     private bool _spinning;
-    private (bool On, Color Color)? _painted;
+    private bool? _painted;
     private FrameworkElement? _page;
 
     public MainWindow(AppEngine engine)
@@ -162,7 +162,7 @@ public partial class MainWindow : Window
             : busy ? (Color)FindResource("AccentColor")
             : problems == 0 ? ((SolidColorBrush)FindResource("GreenBrush")).Color
             : ((SolidColorBrush)FindResource("AmberBrush")).Color;
-        PaintPower(on, color);
+        PaintPower(on);
         TitleDot.Fill = !on ? (Brush)FindResource("GrayBrush") : new SolidColorBrush(color);
 
         if (_engine.Update is { } update)
@@ -334,53 +334,20 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Цвет кнопки: серая — выключено, фиолетовая — подбираю или проверяю, зелёная — всё хорошо, янтарная —
-    /// не всё работает. Включённая кнопка «дышит» мягким свечением.
+    /// Кнопка всегда тёмная с радужной обводкой. Включено — радуга яркая и значок белый, выключено —
+    /// радуга приглушена. Как дела у сервисов, говорят надпись под кнопкой и точка в заголовке.
     /// </summary>
-    private void PaintPower(bool on, Color color)
+    private void PaintPower(bool on)
     {
-        if (_painted == (on, color))
+        if (_painted == on)
             return;
-        _painted = (on, color);
-
-        PowerButton.ApplyTemplate();
-        // Эффект из шаблона WPF может «заморозить» (сделать неизменяемым) — тогда работаем с его копией
-        var glowEllipse = (System.Windows.Shapes.Ellipse)PowerButton.Template.FindName("Glow", PowerButton);
-        if (glowEllipse.Effect.IsFrozen)
-            glowEllipse.Effect = glowEllipse.Effect.Clone();
-        var glow = (DropShadowEffect)glowEllipse.Effect;
-        var top = (GradientStop)PowerButton.Template.FindName("FaceTop", PowerButton);
-        var bottom = (GradientStop)PowerButton.Template.FindName("FaceBottom", PowerButton);
+        _painted = on;
 
         var duration = TimeSpan.FromMilliseconds(450);
-        Animate(top, on ? Lighten(color, 0.15) : Color.FromRgb(0x33, 0x41, 0x55), duration);
-        Animate(bottom, on ? Darken(color, 0.35) : Color.FromRgb(0x1E, 0x29, 0x3B), duration);
-        glow.BeginAnimation(DropShadowEffect.ColorProperty, new ColorAnimation(color, duration));
-        glow.BeginAnimation(DropShadowEffect.OpacityProperty, on
-            ? new DoubleAnimation(0.45, 0.85, TimeSpan.FromSeconds(2.4))
-            {
-                AutoReverse = true,
-                RepeatBehavior = RepeatBehavior.Forever,
-                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-            }
-            : new DoubleAnimation(0, duration));
-
-        // Включено — радуга ярче, выключено — приглушена
-        Funnel.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 0.8 : 0.55, duration));
-        RainbowRing.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 1 : 0.6, duration));
-
-        PowerLabel.Text = on ? "ВЫКЛЮЧИТЬ" : "ВКЛЮЧИТЬ";
-        PowerLabel.Opacity = on ? 0.85 : 1;
+        Funnel.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 0.8 : 0.5, duration));
+        RainbowRing.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 1 : 0.65, duration));
+        PowerIcon.Foreground = on ? Brushes.White : new SolidColorBrush(Color.FromRgb(0xCB, 0xD5, 0xE1));
     }
-
-    private static void Animate(GradientStop stop, Color to, TimeSpan duration) =>
-        stop.BeginAnimation(GradientStop.ColorProperty, new ColorAnimation(to, duration));
-
-    private static Color Lighten(Color c, double k) =>
-        Color.FromRgb((byte)(c.R + (255 - c.R) * k), (byte)(c.G + (255 - c.G) * k), (byte)(c.B + (255 - c.B) * k));
-
-    private static Color Darken(Color c, double k) =>
-        Color.FromRgb((byte)(c.R * (1 - k)), (byte)(c.G * (1 - k)), (byte)(c.B * (1 - k)));
 
     /// <summary>Карточки сервисов появляются по очереди, снизу вверх.</summary>
     private void AnimateCardsIn()
