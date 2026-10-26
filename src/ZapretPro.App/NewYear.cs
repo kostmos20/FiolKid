@@ -143,6 +143,116 @@ public static class NewYear
         return geometry;
     }
 
+    /// <summary>
+    /// Объёмная снежная шапка, лежащая на верхнем крае блока: бугры поднимаются над краем на
+    /// <paramref name="height"/>, снизу снег чуть свисает через край, на углах сходит на нет. Слои: тень на
+    /// блок, тело с переходом от белого к голубовато-серому (низ сугроба в тени), светлая кромка сверху,
+    /// тёмная кромка снизу и поблёскивающие искорки. Край блока — на высоте <c>height + 2</c> от верха холста.
+    /// </summary>
+    public static Canvas CreateDrift(double width, int seed, double height)
+    {
+        var random = new Random(seed);
+        var edge = height + 2;
+
+        // Верх: бугры разной высоты и ширины, на концах — у самого края блока
+        // Снег не выходит за бока блока: начинается и кончается у скруглённых углов
+        const double inset = 5;
+        var top = new List<Point> { new(inset, edge + 2) };
+        var x = inset + 4;
+        while (x < width - inset - 4)
+        {
+            top.Add(new Point(x, edge - height * (0.55 + random.NextDouble() * 0.45)));
+            x += 24 + random.NextDouble() * 22;
+        }
+        top.Add(new Point(width - inset, edge + 2));
+        // Ближе к углам бугры ниже — снег «стекает» с закруглений
+        for (var i = 1; i < top.Count - 1; i++)
+        {
+            var near = Math.Min(top[i].X - inset, width - inset - top[i].X);
+            if (near < 22)
+                top[i] = new Point(top[i].X, edge - (edge - top[i].Y) * (0.35 + near / 22 * 0.65));
+        }
+
+        // Низ: снег чуть свисает через край; изредка — капля побольше
+        var bottom = new List<Point>();
+        x = width - inset;
+        while (x > inset)
+        {
+            var drop = random.NextDouble() < 0.22 ? 6 + random.NextDouble() * 4 : 3 + random.NextDouble() * 2.5;
+            bottom.Add(new Point(x, edge + drop));
+            x -= 10 + random.NextDouble() * 14;
+        }
+        bottom.Add(new Point(inset, edge + 2));
+
+        var body = new PathFigure { StartPoint = top[0], IsClosed = true, IsFilled = true };
+        AddSmooth(body, top);
+        AddSmooth(body, bottom, connectFirst: true);
+        var shape = new PathGeometry([body]);
+        shape.Freeze();
+
+        var topLine = new PathFigure { StartPoint = top[0] };
+        AddSmooth(topLine, top);
+        var bottomLine = new PathFigure { StartPoint = bottom[0] };
+        AddSmooth(bottomLine, bottom);
+
+        var canvas = new Canvas { Width = width, Height = edge + 12, IsHitTestVisible = false };
+        // Тень на блок под снегом
+        canvas.Children.Add(new Path
+        {
+            Data = shape,
+            Fill = new SolidColorBrush(Color.FromArgb(0x70, 0, 0, 0)),
+            RenderTransform = new TranslateTransform(0, 3),
+            Effect = new System.Windows.Media.Effects.BlurEffect { Radius = 5 },
+        });
+        canvas.Children.Add(new Path { Data = shape, Fill = BodyBrush });
+        canvas.Children.Add(new Path { Data = new PathGeometry([bottomLine]), Stroke = RimShade, StrokeThickness = 1.2 });
+        canvas.Children.Add(new Path { Data = new PathGeometry([topLine]), Stroke = Brushes.White, StrokeThickness = 1.6, Opacity = 0.95 });
+
+        // Искорки на снегу
+        for (var i = 0; i < Math.Max(2, (int)(width / 70)); i++)
+        {
+            var spark = new Ellipse { Width = 2.4, Height = 2.4, Fill = Brushes.White, Opacity = 0 };
+            Canvas.SetLeft(spark, 10 + random.NextDouble() * (width - 20));
+            Canvas.SetTop(spark, edge - height * 0.3 + random.NextDouble() * 3);
+            canvas.Children.Add(spark);
+            spark.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.8 + random.NextDouble()))
+            {
+                AutoReverse = true,
+                RepeatBehavior = RepeatBehavior.Forever,
+                BeginTime = TimeSpan.FromSeconds(random.NextDouble() * 3),
+            });
+        }
+        return canvas;
+    }
+
+    /// <summary>Плавная линия через точки (сплайн Катмулла — Рома, переведённый в кривые Безье).</summary>
+    private static void AddSmooth(PathFigure figure, IReadOnlyList<Point> points, bool connectFirst = false)
+    {
+        if (connectFirst)
+            figure.Segments.Add(new LineSegment(points[0], true));
+        for (var i = 0; i < points.Count - 1; i++)
+        {
+            var p0 = points[Math.Max(0, i - 1)];
+            var p1 = points[i];
+            var p2 = points[i + 1];
+            var p3 = points[Math.Min(points.Count - 1, i + 2)];
+            var c1 = new Point(p1.X + (p2.X - p0.X) / 6, p1.Y + (p2.Y - p0.Y) / 6);
+            var c2 = new Point(p2.X - (p3.X - p1.X) / 6, p2.Y - (p3.Y - p1.Y) / 6);
+            figure.Segments.Add(new BezierSegment(c1, c2, p2, true));
+        }
+    }
+
+    // Белый сверху, голубовато-серый к низу: так сугроб выглядит выпуклым, а не плоской заливкой
+    private static readonly Brush BodyBrush = Freeze(new LinearGradientBrush(
+        [
+            new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0),
+            new GradientStop(Color.FromRgb(0xF3, 0xF7, 0xFD), 0.35),
+            new GradientStop(Color.FromRgb(0xD5, 0xE1, 0xF2), 0.7),
+            new GradientStop(Color.FromRgb(0xA9, 0xBE, 0xDD), 1),
+        ], 90));
+
+    private static readonly Brush RimShade = Freeze(new SolidColorBrush(Color.FromArgb(0xB0, 0x95, 0xAA, 0xCB)));
+
     /// <summary>Цвет снега: белый сверху, чуть голубоватый внизу — объём.</summary>
     public static Brush SnowBrush { get; } = Freeze(new LinearGradientBrush(Color.FromRgb(0xFF, 0xFF, 0xFF), Color.FromRgb(0xD6, 0xE4, 0xF5), 90));
 
