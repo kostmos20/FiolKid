@@ -20,7 +20,7 @@ public sealed class Updater
     public const string Repository = "kostmos20/FiolKid";
 
     /// <summary>Открытая часть ключа подписи выпусков (SubjectPublicKeyInfo, base64). Закрытая — только у автора.</summary>
-    public const string PublicKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbeLheIlA8zz6l3L6vxpb+NBIjH/temfwrXE9QQG70o2JgUWOSAxbz/+2jLfZePaOSVO6ay12Jpre4wjOedzisw==";
+    public const string PublicKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpaRjlVsDDHLvyjp8WCH5E+CKkLxhla1+n0Rp+V85aoQZUkyIC2Nc9LV4TPGn3WpvqjAhSfj4yd8vmD+tXrxeyw==";
 
     private readonly HttpClient _http;
     private readonly string _publicKey;

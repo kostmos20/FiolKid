@@ -13,6 +13,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+
+# gh — установленный в системе или распакованный рядом с проектом (F:\Program\FiolKid-tools\gh)
+$ghCommand = Get-Command gh -ErrorAction SilentlyContinue
+$gh = if ($ghCommand) { $ghCommand.Source } else { Join-Path (Split-Path $root -Parent) 'FiolKid-tools\gh\bin\gh.exe' }
+if (-not (Test-Path $gh)) { throw "Не нашёл GitHub CLI (gh): $gh" }
+function gh { & $gh @args }
 $csproj = Join-Path $root 'src\ZapretPro.App\ZapretPro.App.csproj'
 $version = ([xml](Get-Content $csproj -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 if (-not $version) { throw 'Не нашёл <Version> в ZapretPro.App.csproj' }
