@@ -9,6 +9,7 @@ using ZapretPro.Core.Update;
 //   keygen                      создать ключ (один раз) и показать открытую часть для Updater.PublicKey
 //   pubkey                      показать открытую часть
 //   sign <zip> <версия> [файл]  подписать: рядом с архивом появятся FiolKid-update.json и .sig
+//   check                       проверить последний выпуск на GitHub, как это делает программа
 //   export <файл.pem>           резервная копия закрытого ключа (хранить офлайн, никому не давать)
 
 var keyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FiolKid-release", "signing-key.bin");
@@ -73,6 +74,16 @@ try
             return 0;
         }
 
+        case "check":
+        {
+            // Как программа у людей: последний выпуск на GitHub, подпись — встроенным ключом
+            var update = new Updater().CheckAsync(new Version(0, 0, 0), CancellationToken.None).GetAwaiter().GetResult();
+            Console.WriteLine(update is null
+                ? "Выпусков нет"
+                : $"Подпись верна. Последняя версия {update.Version}, {update.Size / 1048576.0:0.0} МБ, sha256 {update.Sha256}\n{update.ZipUrl}");
+            return 0;
+        }
+
         case "export" when args.Length >= 2:
             using (var key = LoadKey())
                 File.WriteAllText(args[1], key.ExportPkcs8PrivateKeyPem());
@@ -84,7 +95,7 @@ try
             return 2;
     }
 }
-catch (Exception e) when (e is InvalidOperationException or CryptographicException or IOException or FormatException or ArgumentException)
+catch (Exception e) when (e is InvalidOperationException or CryptographicException or IOException or FormatException or ArgumentException or UpdateException)
 {
     Console.Error.WriteLine($"Ошибка: {e.Message}");
     return 1;
