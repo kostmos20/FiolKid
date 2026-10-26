@@ -266,7 +266,8 @@ public partial class SettingsPage : UserControl
         };
 
         var bench = (settings.StrategyBenchmark ?? []).ToDictionary(b => b.Id);
-        var fastest = bench.Values.Where(b => b.Ok > 0).OrderByDescending(b => b.Ok).ThenBy(b => b.Milliseconds).FirstOrDefault()?.Id;
+        // Самый быстрый — итог подбора (в таблице рядом быстрый отсев и точный замер, их числа не сравнить)
+        var fastest = bench.Count > 0 ? settings.LastStrategyId : null;
         var rows = _engine.StrategyIds.Select(id =>
         {
             var notes = new List<string>();
@@ -275,8 +276,14 @@ public partial class SettingsPage : UserControl
             if (id == fastest)
                 notes.Add("самый быстрый");
             var b = bench.GetValueOrDefault(id);
-            var right = b is null ? "" : b.Milliseconds < 0 ? "не запустился" : $"{b.Ok} из {b.Total} · {b.Milliseconds / 1000:0.0} с";
-            var brush = b is null ? "MutedBrush" : b.Ok == b.Total ? "GreenBrush" : b.Ok > 0 ? "AmberBrush" : "RedBrush";
+            var right = b switch
+            {
+                null => "",
+                { Milliseconds: -2 } => "не проверялся",
+                { Milliseconds: < 0 } => "не запустился",
+                _ => $"{b.Ok} из {b.Total} · {b.Milliseconds / 1000:0.0} с",
+            };
+            var brush = b is null || b.Milliseconds == -2 ? "MutedBrush" : b.Ok == b.Total ? "GreenBrush" : b.Ok > 0 ? "AmberBrush" : "RedBrush";
             return new Row(id, id, string.Join(" · ", notes), right, Brush(brush));
         }).ToList();
         var signature = string.Join("|", rows.Select(r => $"{r.Key}{r.Note}{r.Right}"));

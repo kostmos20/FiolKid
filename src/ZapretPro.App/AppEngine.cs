@@ -393,7 +393,12 @@ public sealed class AppEngine
         {
             sb.AppendLine($"--- замер альтов ({settings.StrategyBenchmarkAt?.ToLocalTime():dd.MM HH:mm}) ---");
             foreach (var e in bench.OrderByDescending(b => b.Ok).ThenBy(b => b.Milliseconds < 0 ? double.MaxValue : b.Milliseconds))
-                sb.AppendLine($"{e.Id}: {e.Ok} из {e.Total}, {(e.Milliseconds < 0 ? "не запустился" : $"{e.Milliseconds / 1000:0.0} с")}");
+                sb.AppendLine($"{e.Id}: " + e.Milliseconds switch
+                {
+                    -2 => "не проверялся",
+                    < 0 => "не запустился",
+                    _ => $"{e.Ok} из {e.Total}, {e.Milliseconds / 1000:0.0} с",
+                });
         }
         if (settings.ServerBenchmark is { Count: > 0 } servers)
         {

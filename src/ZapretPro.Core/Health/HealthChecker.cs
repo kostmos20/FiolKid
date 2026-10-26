@@ -87,6 +87,8 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
 
     public Task<(int Ok, int Total, double Milliseconds)> MeasureZapretAsync(CancellationToken ct) => ZapretSpeed.MeasureAsync(ct);
 
+    public Task<(int Ok, int Total, double Milliseconds)> QuickCheckZapretAsync(CancellationToken ct) => ZapretSpeed.QuickCheckAsync(ct);
+
     public static bool IsAiCountryOk(string? country) => country is not null && !AiBlockedCountries.Contains(country);
 
     public async Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct)

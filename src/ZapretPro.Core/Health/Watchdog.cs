@@ -47,6 +47,12 @@ public sealed record WatchdogOptions
     public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(1);
     /// <summary>Через сколько замер скорости альтов считается устаревшим.</summary>
     public TimeSpan BenchmarkLifetime { get; init; } = TimeSpan.FromDays(7);
+    /// <summary>Прогрев перед быстрым отсевом альтов: winws уже сказал, что готов, нужна лишь пауза.</summary>
+    public TimeSpan ScreenWarmUp { get; init; } = TimeSpan.FromSeconds(0.3);
+    /// <summary>Сколько лучших альтов меряем точно во втором проходе.</summary>
+    public int Finalists { get; init; } = 3;
+    /// <summary>«Быстрый» при отсеве: все четыре адреса вместе ответили не дольше этого.</summary>
+    public double FastScreenMilliseconds { get; init; } = 2000;
 }
 
 /// <summary>
@@ -205,8 +211,11 @@ public sealed class Watchdog
     }
 
     /// <summary>
-    /// Запускает по очереди каждый альт и меряет, как быстро грузятся YouTube и Discord. Самый быстрый
-    /// из открывших больше всего становится текущим; если с ним что-то не открылось — обычный перебор с него.
+    /// Подбор самого быстрого альта в два прохода. Первый — быстрый отсев: каждый альт пару секунд,
+    /// «открываются ли YouTube и Discord вообще»; начинаем с тех, что были хороши в прошлый раз, и
+    /// останавливаемся, когда нашлось несколько быстрых и полностью рабочих. Второй — точный замер скорости
+    /// загрузки только у лучших. Самый быстрый становится текущим; если с ним что-то не открылось —
+    /// обычный перебор с него.
     /// </summary>
     private async Task BenchmarkCoreAsync(CancellationToken ct)
     {
@@ -224,36 +233,65 @@ public sealed class Watchdog
                 await ApplyVpnAsync(ct);
             }
 
-            Write($"Замеряю скорость всех альтов ({strategies.Count}) — это займёт пару минут");
-            var scores = new List<StrategyScore>();
-            for (var i = 0; i < strategies.Count; i++)
+            Write($"Подбираю самый быстрый альт ({strategies.Count} шт.)");
+            var started = _time.GetUtcNow();
+            var screened = new Dictionary<string, StrategyScore>();
+            var driverBroken = false;
+            foreach (var index in ScreeningOrder())
             {
-                _current = i;
-                Notify();
-                var id = strategies[i].Id;
-                if (!await _zapret.StartAsync(strategies[i], ct))
+                var id = strategies[index].Id;
+                var score = await TryStrategyAsync(index, _options.ScreenWarmUp, _speed!.QuickCheckZapretAsync, ct);
+                if (score is null)
                 {
-                    Write($"Альт «{id}» не запустился: {_zapret.LastError}");
                     if (_zapret.DriverBroken)
+                    {
+                        driverBroken = true;
                         break;
-                    scores.Add(new StrategyScore(id, 0, 0, double.MaxValue));
+                    }
+                    screened[id] = new StrategyScore(id, 0, 0, double.MaxValue);
                     continue;
                 }
-                await Task.Delay(_options.WarmUp, _time, ct);
-                var (ok, total, ms) = await _speed!.MeasureZapretAsync(ct);
-                scores.Add(new StrategyScore(id, ok, total, ms));
-                Write($"Альт «{id}»: открылось {ok} из {total}, {ms / 1000:0.0} с");
+                screened[id] = score;
+                // Нашлось несколько быстрых и полностью рабочих — остальные вряд ли окажутся заметно лучше
+                if (screened.Values.Count(s => s.AllOk && s.Milliseconds <= _options.FastScreenMilliseconds) >= _options.Finalists)
+                {
+                    Write("Нашлось достаточно быстрых альтов — остальные не проверяю");
+                    break;
+                }
             }
 
-            best = scores.Where(s => s.Ok > 0).OrderByDescending(s => s.Ok).ThenBy(s => s.Milliseconds).FirstOrDefault();
-            // Неполный замер (завис драйвер) и пустой (не было интернета) не сохраняем: они не показывают, какой альт быстрее
-            if (scores.Count == strategies.Count && best is not null)
+            // Второй проход: точная скорость только у лучших по отсеву
+            var maxOk = screened.Values.Select(s => s.Ok).DefaultIfEmpty(0).Max();
+            var finalists = screened.Values.Where(s => s.Ok > 0 && s.Ok == maxOk)
+                .OrderBy(s => s.Milliseconds).Take(_options.Finalists).ToList();
+            var measured = new List<StrategyScore>();
+            if (finalists.Count > 1 && !driverBroken)
             {
+                foreach (var finalist in finalists)
+                {
+                    var score = await TryStrategyAsync(IndexOf(finalist.Id), _options.WarmUp, _speed!.MeasureZapretAsync, ct);
+                    if (score is not null)
+                        measured.Add(score);
+                }
+            }
+            // Быстрый отсев и точный замер меряют разное (заголовки и полную загрузку) — не смешиваем:
+            // был точный замер — решает он, иначе лучший по отсеву
+            best = measured.Where(s => s.Ok > 0).OrderByDescending(s => s.Ok).ThenBy(s => s.Milliseconds).FirstOrDefault()
+                   ?? finalists.FirstOrDefault();
+            Write($"Подбор занял {(_time.GetUtcNow() - started).TotalSeconds:0} с");
+
+            // Неполный замер (завис драйвер) и пустой (не было интернета) не сохраняем: они не показывают, какой альт быстрее
+            if (!driverBroken && best is not null)
+            {
+                var final = measured.ToDictionary(s => s.Id);
                 _settings.Update(s =>
                 {
                     s.StrategyBenchmarkAt = _time.GetUtcNow();
-                    s.StrategyBenchmark = scores.Select(x => new StrategyBenchmarkEntry(x.Id, x.Ok, x.Total,
-                        x.Milliseconds == double.MaxValue ? -1 : Math.Round(x.Milliseconds))).ToList();
+                    // −1 — не запустился, −2 — не проверяли (подбор остановился раньше)
+                    s.StrategyBenchmark = strategies.Select(x =>
+                        final.TryGetValue(x.Id, out var m) ? Entry(m)
+                        : screened.TryGetValue(x.Id, out var q) ? Entry(q)
+                        : new StrategyBenchmarkEntry(x.Id, 0, 0, -2)).ToList();
                 });
             }
         }
@@ -271,6 +309,43 @@ public sealed class Watchdog
         Write($"Самый быстрый альт: «{best.Id}» ({best.Milliseconds / 1000:0.0} с)");
         _settings.Update(s => s.LastStrategyId = best.Id);
         await SearchAsync(IndexOf(best.Id), ct);
+    }
+
+    private static StrategyBenchmarkEntry Entry(StrategyScore s) =>
+        new(s.Id, s.Ok, s.Total, s.Milliseconds == double.MaxValue ? -1 : Math.Round(s.Milliseconds));
+
+    /// <summary>Запустить альт, дать ему прогреться и проверить. Null — альт не запустился.</summary>
+    private async Task<StrategyScore?> TryStrategyAsync(int index, TimeSpan warmUp,
+        Func<CancellationToken, Task<(int Ok, int Total, double Milliseconds)>> check, CancellationToken ct)
+    {
+        _current = index;
+        Notify();
+        var id = _zapret.Strategies[index].Id;
+        if (!await _zapret.StartAsync(_zapret.Strategies[index], ct))
+        {
+            Write($"Альт «{id}» не запустился: {_zapret.LastError}");
+            return null;
+        }
+        await Task.Delay(warmUp, _time, ct);
+        var (ok, total, ms) = await check(ct);
+        Write($"Альт «{id}»: открылось {ok} из {total}, {ms / 1000:0.0} с");
+        return new StrategyScore(id, ok, total, ms);
+    }
+
+    /// <summary>
+    /// В каком порядке проверять альты: сначала лучшие по прошлому замеру и текущий, потом остальные
+    /// по списку. Так быстрые находятся сразу, и подбор чаще заканчивается раньше.
+    /// </summary>
+    private IEnumerable<int> ScreeningOrder()
+    {
+        var settings = _settings.Load();
+        var previous = (settings.StrategyBenchmark ?? [])
+            .Where(b => b.Ok > 0 && b.Milliseconds >= 0)
+            .OrderByDescending(b => b.Ok).ThenBy(b => b.Milliseconds)
+            .Select(b => b.Id);
+        var first = new[] { settings.LastStrategyId }.OfType<string>().Concat(previous)
+            .Select(IndexOf).Where(i => i >= 0);
+        return first.Concat(Enumerable.Range(0, _zapret.Strategies.Count)).Distinct().ToList();
     }
 
     /// <summary>Текущий альт перестал помогать: что делать — зависит от режима.</summary>

@@ -12,7 +12,7 @@
     <RootNamespace>ZapretPro.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\fiolkid.ico</ApplicationIcon>
-    <Version>0.9.5</Version>
+    <Version>0.9.6</Version>
     <Product>FiolKid</Product>
   </PropertyGroup>
 

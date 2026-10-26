@@ -105,7 +105,8 @@ public sealed class WatchdogTests : IDisposable
 
         await watchdog.StartAsync(default);
 
-        Assert.Equal(["general", "ALT", "ALT2", "ALT3", "ALT2"], _zapret.Started);
+        // Отсев всех по порядку, затем точный замер трёх лучших (ALT2, ALT3, general) и запуск победителя
+        Assert.Equal(["general", "ALT", "ALT2", "ALT3", "ALT2", "ALT3", "general", "ALT2"], _zapret.Started);
         Assert.Equal("ALT2", _zapret.Current);
         Assert.Equal(ZapretState.Working, watchdog.Status.State);
         var saved = _settings.Load();
@@ -117,6 +118,42 @@ public sealed class WatchdogTests : IDisposable
         _zapret.Started.Clear();
         await watchdog.StartAsync(default);
         Assert.Equal(["ALT2"], _zapret.Started);
+    }
+
+    [Fact]
+    public async Task Fastest_mode_stops_screening_once_enough_fast_strategies_are_found()
+    {
+        var speed = new FakeSpeed(_zapret) { ["general"] = (4, 500), ["ALT"] = (4, 600), ["ALT2"] = (4, 700), ["ALT3"] = (4, 100) };
+        var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero }, _time, speed);
+        _zapret.Works("general", "ALT", "ALT2", "ALT3");
+        _settings.Update(s => s.StrategyMode = StrategyModes.Fastest);
+
+        await watchdog.StartAsync(default);
+
+        // Три быстрых нашлись сразу — ALT3 не проверяли вовсе
+        Assert.DoesNotContain("ALT3", _zapret.Started);
+        Assert.Equal("general", _zapret.Current);
+        Assert.Equal(-2, _settings.Load().StrategyBenchmark!.Single(b => b.Id == "ALT3").Milliseconds);
+    }
+
+    [Fact]
+    public async Task Fastest_mode_screens_previous_winner_first()
+    {
+        var speed = new FakeSpeed(_zapret) { ["general"] = (0, 9000), ["ALT"] = (0, 9000), ["ALT2"] = (0, 9000), ["ALT3"] = (4, 300) };
+        var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero }, _time, speed);
+        _zapret.Works("ALT3");
+        _settings.Update(s =>
+        {
+            s.StrategyMode = StrategyModes.Fastest;
+            s.LastStrategyId = "ALT3";
+        });
+
+        await watchdog.StartAsync(default);
+
+        Assert.Equal("ALT3", _zapret.Started[0]);
+        Assert.Equal("ALT3", _zapret.Current);
     }
 
     [Fact]
@@ -592,6 +629,8 @@ public sealed class WatchdogTests : IDisposable
     {
         public Task<(int Ok, int Total, double Milliseconds)> MeasureZapretAsync(CancellationToken ct) =>
             Task.FromResult(zapret.Current is { } id && TryGetValue(id, out var r) ? (r.Ok, 4, r.Ms) : (0, 4, 48000.0));
+
+        public Task<(int Ok, int Total, double Milliseconds)> QuickCheckZapretAsync(CancellationToken ct) => MeasureZapretAsync(ct);
     }
 
     private sealed class FakeTime : TimeProvider

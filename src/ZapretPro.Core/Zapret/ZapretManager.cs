@@ -103,7 +103,12 @@ public sealed class ZapretManager : IZapretRunner
         _output.Attach(process);
         _process = process;
 
-        await Task.Delay(StartupGrace, ct);
+        // Ждём, пока winws скажет «capture is started» (обычно доли секунды), но не дольше StartupGrace:
+        // за это время он либо готов, либо уже упал. Раньше ждали всегда полностью — подбор альтов тянулся
+        var deadline = DateTime.UtcNow + StartupGrace;
+        while (DateTime.UtcNow < deadline && !process.HasExited
+               && !_output.Lines.Any(l => l.Contains("capture is started", StringComparison.OrdinalIgnoreCase)))
+            await Task.Delay(50, ct);
         if (process.HasExited)
         {
             var lines = _output.Lines;
