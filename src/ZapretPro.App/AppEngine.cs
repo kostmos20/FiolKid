@@ -4,6 +4,7 @@ using ZapretPro.Core.Dns;
 using ZapretPro.Core.Health;
 using ZapretPro.Core.Infrastructure;
 using ZapretPro.Core.Key;
+using ZapretPro.Core.Update;
 using ZapretPro.Core.Vpn;
 using ZapretPro.Core.Zapret;
 
@@ -611,6 +612,115 @@ public sealed class AppEngine
         var scores = await Task.Run(() => _subscription.MeasureNowAsync(cts.Token));
         if (scores is not null)
             AfterCredentialsChanged(); // переподключиться к новым лучшим серверам
+    }
+
+    // ---------- Обновления ----------
+
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
+    private readonly Updater _updater = new();
+    private readonly SemaphoreSlim _updateGate = new(1, 1);
+
+    /// <summary>Найденное обновление (null — нет или ещё не проверяли).</summary>
+    public AvailableUpdate? Update { get; private set; }
+
+    /// <summary>Для настроек: «последняя версия», «не удалось проверить: …», «скачиваю 40%».</summary>
+    public string UpdateStatus { get; private set; } = "Ещё не проверял";
+
+    public bool UpdateBusy { get; private set; }
+
+    /// <summary>Нашлось обновление — для уведомления в трее (один раз на версию).</summary>
+    public event Action<AvailableUpdate>? UpdateFound;
+
+    /// <summary>Проверять обновления через минуту после запуска и потом раз в 6 часов, включена программа или нет.</summary>
+    public void StartUpdateChecks() => _ = Task.Run(async () =>
+    {
+        await Task.Delay(TimeSpan.FromMinutes(1));
+        while (true)
+        {
+            await CheckUpdatesAsync();
+            await Task.Delay(UpdateCheckInterval);
+        }
+    });
+
+    public async Task CheckUpdatesAsync()
+    {
+        if (!await _updateGate.WaitAsync(0))
+            return;
+        UpdateBusy = true;
+        UpdateStatus = "Проверяю…";
+        StatusChanged?.Invoke();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var found = await _updater.CheckAsync(Updater.Current, cts.Token);
+            var isNew = found is not null && found.Version != Update?.Version;
+            Update = found;
+            UpdateStatus = found is null
+                ? $"Это последняя версия (проверено в {DateTime.Now:HH:mm})"
+                : $"Вышла версия {found.Version}";
+            if (isNew)
+            {
+                Write($"Вышло обновление {found!.Version}");
+                UpdateFound?.Invoke(found);
+            }
+        }
+        catch (UpdateException e)
+        {
+            UpdateStatus = $"Не удалось проверить: {e.Message}";
+            Write($"Обновления: {e.Message}");
+        }
+        catch (OperationCanceledException)
+        {
+            UpdateStatus = "Не удалось проверить: GitHub не ответил за минуту";
+        }
+        finally
+        {
+            UpdateBusy = false;
+            _updateGate.Release();
+            StatusChanged?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Скачать и проверить обновление. Возвращает папку новой версии — её запускает окно, после того как
+    /// программа всё выключит (см. App.InstallUpdateAsync). Null — не получилось, причина в <see cref="UpdateStatus"/>.
+    /// </summary>
+    public async Task<string?> DownloadUpdateAsync()
+    {
+        if (Update is not { } update || !await _updateGate.WaitAsync(0))
+            return null;
+        UpdateBusy = true;
+        try
+        {
+            var lastShown = -1;
+            var progress = new Progress<double>(p =>
+            {
+                var percent = (int)(p * 100);
+                if (percent == lastShown)
+                    return;
+                lastShown = percent;
+                UpdateStatus = $"Скачиваю версию {update.Version}… {percent}%";
+                StatusChanged?.Invoke();
+            });
+            Write($"Скачиваю обновление {update.Version}");
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(20));
+            var dir = await Task.Run(() => _updater.DownloadAsync(update, progress, cts.Token));
+            UpdateStatus = $"Версия {update.Version} скачана и проверена — устанавливаю";
+            Write($"Обновление {update.Version} скачано, подпись и архив в порядке");
+            return dir;
+        }
+        catch (Exception e) when (e is UpdateException or IOException or UnauthorizedAccessException or InvalidDataException or OperationCanceledException)
+        {
+            UpdateStatus = $"Не получилось обновиться: {e.Message}";
+            Write($"Обновление не скачалось: {e.Message}");
+            return null;
+        }
+        finally
+        {
+            UpdateBusy = false;
+            _updateGate.Release();
+            StatusChanged?.Invoke();
+        }
     }
 
     // ---------- Запуск с Windows и отчёты ----------

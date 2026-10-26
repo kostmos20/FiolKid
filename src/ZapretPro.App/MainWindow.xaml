@@ -177,6 +177,16 @@
                     <TextBlock x:Name="Subline" Text="Нажми на кнопку, чтобы включить" FontSize="17"
                                Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" TextAlignment="Center"
                                TextWrapping="Wrap" Margin="30,6,30,0"/>
+
+                    <!-- Вышла новая версия -->
+                    <Border x:Name="UpdateBanner" Visibility="Collapsed" Margin="20,12,20,0" Padding="14,8,8,8" CornerRadius="14"
+                            Background="{StaticResource AccentSoftBrush}" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1">
+                        <DockPanel>
+                            <Button x:Name="UpdateButton" DockPanel.Dock="Right" Style="{StaticResource PillButton}" Content="Обновить"
+                                    FontSize="15" Padding="14,6" Click="Update_Click"/>
+                            <TextBlock x:Name="UpdateText" FontSize="15" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        </DockPanel>
+                    </Border>
                 </StackPanel>
 
                 <!-- Сервисы -->

@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZapretPro.KeyTool", "src\Za
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZapretPro.Core.Tests", "tests\ZapretPro.Core.Tests\ZapretPro.Core.Tests.csproj", "{489FB50A-7259-4963-89EB-2C9145AB929C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZapretPro.ReleaseTool", "src\ZapretPro.ReleaseTool\ZapretPro.ReleaseTool.csproj", "{C9319A75-FC25-420D-9C64-92C4E71E687F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -71,6 +73,18 @@ Global
 		{489FB50A-7259-4963-89EB-2C9145AB929C}.Release|x64.Build.0 = Release|Any CPU
 		{489FB50A-7259-4963-89EB-2C9145AB929C}.Release|x86.ActiveCfg = Release|Any CPU
 		{489FB50A-7259-4963-89EB-2C9145AB929C}.Release|x86.Build.0 = Release|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Debug|x64.Build.0 = Debug|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Debug|x86.Build.0 = Debug|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Release|x64.ActiveCfg = Release|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Release|x64.Build.0 = Release|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Release|x86.ActiveCfg = Release|Any CPU
+		{C9319A75-FC25-420D-9C64-92C4E71E687F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -80,5 +94,6 @@ Global
 		{18686923-6145-4B4E-A317-51D96A5F15BA} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{0552B6EA-812F-44AF-9E3D-D1C8DF36000B} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{489FB50A-7259-4963-89EB-2C9145AB929C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{C9319A75-FC25-420D-9C64-92C4E71E687F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

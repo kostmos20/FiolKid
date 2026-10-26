@@ -497,3 +497,7 @@ third_party/
 
 # Архив для отправки из build.ps1
 /*.zip
+
+# Подписанное описание выпуска — создаётся tools\publish-release.ps1
+/FiolKid-update.json
+/FiolKid-update.json.sig

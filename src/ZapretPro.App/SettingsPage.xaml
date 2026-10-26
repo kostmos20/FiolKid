@@ -146,10 +146,22 @@
                 </StackPanel>
             </Border>
 
-            <!-- Версии -->
+            <!-- Обновления и версии -->
             <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                 <StackPanel>
-                    <TextBlock Text="Версии" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock Text="Обновления" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock x:Name="UpdateStatusText" FontSize="16" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="UpdateNotesText" Style="{StaticResource Hint}" Margin="0,4,0,0" Visibility="Collapsed"/>
+                    <WrapPanel Margin="0,10,0,0">
+                        <Button x:Name="InstallUpdateButton" Style="{StaticResource PillButton}" Content="Обновить" Margin="0,0,8,8"
+                                Visibility="Collapsed" Click="InstallUpdate_Click"/>
+                        <Button x:Name="CheckUpdateButton" Style="{StaticResource SmallButton}" Content="Проверить обновления" Margin="0,0,0,8"
+                                Click="CheckUpdate_Click"/>
+                    </WrapPanel>
+                    <TextBlock Text="Обновления берутся только с официальной страницы программы на GitHub и проверяются по подписи автора. Ключ, подписка и настройки при обновлении сохраняются."
+                               Style="{StaticResource Hint}"/>
+
+                    <TextBlock Text="Что внутри" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,0"/>
                     <ItemsControl x:Name="VersionsList" Margin="0,10,0,0">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -162,7 +174,7 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                    <TextBlock Text="Список заблокированных сайтов обновляется сам раз в сутки. Автообновление остального появится позже."
+                    <TextBlock Text="Список заблокированных сайтов обновляется сам раз в сутки."
                                Style="{StaticResource Hint}" Margin="0,10,0,0"/>
                 </StackPanel>
             </Border>

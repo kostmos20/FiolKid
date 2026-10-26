@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Только для автора: ключ подписи выпусков и подпись описания. В сборку для людей не входит -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>FiolKid.ReleaseTool</AssemblyName>
+    <RootNamespace>ZapretPro.ReleaseTool</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZapretPro.Core\ZapretPro.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -57,6 +57,7 @@ public partial class SettingsPage : UserControl
             RefreshTelegram();
             _autostart ??= _engine.AutostartEnabled;
             AutostartSwitch.IsChecked = _autostart;
+            RefreshUpdates();
             // Привязка WPF видит только свойства, а у кортежа — поля
             VersionsList.ItemsSource = _engine.ComponentVersions().Select(v => new { Item1 = v.Name, Item2 = v.Version }).ToList();
         }
@@ -327,6 +328,33 @@ public partial class SettingsPage : UserControl
         Toast?.Invoke("Замеряю все альты — пару минут YouTube и Discord могут подтормаживать");
         await _engine.BenchmarkStrategiesAsync();
         Refresh();
+    }
+
+    // ---------- Обновления ----------
+
+    private void RefreshUpdates()
+    {
+        var update = _engine.Update;
+        UpdateStatusText.Text = $"Версия {typeof(SettingsPage).Assembly.GetName().Version?.ToString(3)}. {_engine.UpdateStatus}";
+        UpdateNotesText.Text = update?.Notes is { Length: > 0 } notes ? $"Что нового: {notes}" : "";
+        UpdateNotesText.Visibility = string.IsNullOrEmpty(UpdateNotesText.Text) ? Visibility.Collapsed : Visibility.Visible;
+        InstallUpdateButton.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
+        InstallUpdateButton.Content = update is null ? "Обновить" : $"Обновить до {update.Version}";
+        InstallUpdateButton.IsEnabled = !_engine.UpdateBusy;
+        CheckUpdateButton.IsEnabled = !_engine.UpdateBusy;
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        await _engine.CheckUpdatesAsync();
+        Toast?.Invoke(_engine.UpdateStatus);
+        Refresh();
+    }
+
+    private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow main)
+            await main.InstallUpdateAsync();
     }
 
     // ---------- VPN, Telegram, запуск ----------

@@ -163,6 +163,15 @@ public partial class MainWindow : Window
         PaintPower(on, color);
         TitleDot.Fill = !on ? (Brush)FindResource("GrayBrush") : new SolidColorBrush(color);
 
+        if (_engine.Update is { } update)
+        {
+            UpdateBanner.Visibility = Visibility.Visible;
+            UpdateText.Text = _engine.UpdateBusy ? _engine.UpdateStatus : $"Вышла версия {update.Version}";
+            UpdateButton.IsEnabled = !_engine.UpdateBusy;
+        }
+        else
+            UpdateBanner.Visibility = Visibility.Collapsed;
+
         SetSpinning(busy);
         if (searching)
             _pulse.Begin(this, true);
@@ -210,6 +219,28 @@ public partial class MainWindow : Window
             PowerButton.IsEnabled = true;
             Refresh();
         }
+    }
+
+    private async void Update_Click(object sender, RoutedEventArgs e) => await InstallUpdateAsync();
+
+    /// <summary>
+    /// Скачать, проверить подпись и установить обновление. На минуту всё выключится: программа закроется,
+    /// новая версия заменит файлы и запустится сама.
+    /// </summary>
+    public async Task InstallUpdateAsync()
+    {
+        if (_engine.Update is not { } update || _engine.UpdateBusy)
+            return;
+        ShowToast($"Скачиваю версию {update.Version}…");
+        var dir = await _engine.DownloadUpdateAsync();
+        if (dir is null)
+        {
+            ShowToast(_engine.UpdateStatus);
+            return;
+        }
+        ShowToast("Устанавливаю — программа перезапустится сама через минуту");
+        await Task.Delay(1500);
+        await ((App)Application.Current).InstallUpdateAsync(dir);
     }
 
     /// <summary>Кнопка «проседает» и пружинит обратно.</summary>

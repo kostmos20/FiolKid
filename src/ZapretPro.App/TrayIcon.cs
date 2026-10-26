@@ -50,6 +50,9 @@ public sealed class TrayIcon : IDisposable
         _icon.BalloonTipClicked += (_, _) => open();
 
         _engine.StatusChanged += () => System.Windows.Application.Current.Dispatcher.BeginInvoke(Update);
+        _engine.UpdateFound += update => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+            _icon.ShowBalloonTip(10000, $"Вышла версия FiolKid {update.Version}",
+                "Нажми сюда и потом «Обновить» на главном экране. Ключ и настройки сохранятся.", Forms.ToolTipIcon.Info));
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _timer.Tick += (_, _) => Update();
         _timer.Start();

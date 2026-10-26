@@ -24,7 +24,9 @@ public static class ChildProcesses
 
         var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION
         {
-            BasicLimitInformation = { LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE },
+            // BREAKAWAY_OK: выйти из задания может только процесс, запущенный с особым флагом (обновлялка,
+            // которая должна пережить программу); winws и прокси запускаются без него и остаются внутри
+            BasicLimitInformation = { LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK },
         };
         var size = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
         if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)size)
@@ -71,8 +73,48 @@ public static class ChildProcesses
         }
     }
 
+    /// <summary>
+    /// Запустить процесс вне задания: он не завершится вместе с программой. Нужен обновлялке —
+    /// она заменяет файлы, когда программа уже закрылась.
+    /// </summary>
+    public static void StartDetached(string exe, string arguments)
+    {
+        var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+        var flags = _job != IntPtr.Zero ? CREATE_BREAKAWAY_FROM_JOB : 0;
+        // Строка команды — изменяемый буфер: CreateProcessW вправе писать в неё
+        if (!CreateProcess(exe, new System.Text.StringBuilder($"\"{exe}\" {arguments}"), IntPtr.Zero, IntPtr.Zero, false, flags, IntPtr.Zero,
+                Path.GetDirectoryName(exe), ref startup, out var info))
+            throw new Win32Exception();
+        CloseHandle(info.hProcess);
+        CloseHandle(info.hThread);
+    }
+
+    private const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct STARTUPINFO
+    {
+        public int cb;
+        public string? lpReserved, lpDesktop, lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess, hThread;
+        public int dwProcessId, dwThreadId;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CreateProcess(string application, System.Text.StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
+        bool inheritHandles, uint flags, IntPtr environment, string? currentDirectory, ref STARTUPINFO startup, out PROCESS_INFORMATION info);
+
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+    private const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
