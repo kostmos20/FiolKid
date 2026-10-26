@@ -1,6 +1,13 @@
 ﻿# Собирает готовую к запуску программу в папку dist и архив FiolKid.zip для отправки.
 # Запуск: правой кнопкой по build.ps1 -> «Выполнить с помощью PowerShell»
 # или из терминала: powershell -ExecutionPolicy Bypass -File build.ps1
+#
+# Для выпуска на GitHub (tools\publish-release.ps1): -ZipPath release\FiolKid.zip -NoDist —
+# архив в отдельную папку, а dist и FiolKid.zip, которыми пользуется автор, не трогаем.
+param(
+    [string]$ZipPath,
+    [switch]$NoDist
+)
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -69,23 +76,28 @@ New-Item -ItemType Directory -Force $package | Out-Null
 Copy-Item -Recurse $stage $packageApp
 Remove-Item (Join-Path $packageApp 'ПроверитьКлюч.exe')
 Copy-Item (Join-Path $root 'docs\КАК-ЗАПУСТИТЬ.txt') $packageApp
-$zip = Join-Path $root 'FiolKid.zip'
+$zip = if ($ZipPath) { [IO.Path]::GetFullPath((Join-Path $root $ZipPath)) } else { Join-Path $root 'FiolKid.zip' }
+New-Item -ItemType Directory -Force (Split-Path $zip -Parent) | Out-Null
 if (Test-Path $zip) { Remove-Item $zip }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 # UTF-8 в именах файлов, иначе русские названия в архиве превратятся в кракозябры
 [IO.Compression.ZipFile]::CreateFromDirectory($package, $zip, 'Optimal', $false, [Text.Encoding]::UTF8)
 
 # Переносим в dist только изменившееся; данные tg-ws-proxy, созданные при запуске, не трогаем
-robocopy $stage $dist /MIR /XD TgWsProxy_data /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) {
-    Write-Warning 'Часть файлов в dist занята — закрой FiolKid.exe и запусти сборку ещё раз. Архив при этом собран полностью.'
+if (-not $NoDist) {
+    robocopy $stage $dist /MIR /XD TgWsProxy_data /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        Write-Warning 'Часть файлов в dist занята — закрой FiolKid.exe и запусти сборку ещё раз. Архив при этом собран полностью.'
+    }
+    $global:LASTEXITCODE = 0
 }
 
 # Компилятор остаётся висеть в памяти после сборки — выключаем
 dotnet build-server shutdown | Out-Null
 
 Write-Host ''
-Write-Host "Готово: $dist" -ForegroundColor Green
-Get-ChildItem $dist -File | ForEach-Object { '  {0}  ({1:N0} МБ)' -f $_.Name, ($_.Length / 1MB) }
-Get-ChildItem $dist -Directory | ForEach-Object { '  {0}\' -f $_.Name }
+$shown = if ($NoDist) { $stage } else { $dist }
+Write-Host "Готово: $shown" -ForegroundColor Green
+Get-ChildItem $shown -File | ForEach-Object { '  {0}  ({1:N0} МБ)' -f $_.Name, ($_.Length / 1MB) }
+Get-ChildItem $shown -Directory | ForEach-Object { '  {0}\' -f $_.Name }
 Write-Host ("Архив для отправки: {0} ({1:N0} МБ)" -f $zip, ((Get-Item $zip).Length / 1MB)) -ForegroundColor Green

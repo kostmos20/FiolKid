@@ -51,7 +51,7 @@ public sealed record WatchdogOptions
 
 /// <summary>
 /// Следит за zapret, прокси Telegram и VPN: периодически проверяет сервисы, перезапускает
-/// упавшее, перебирает стратегии (PLAN.md, раздел «Zapret») и включает запасной режим через VPN.
+/// упавшее, перебирает стратегии (docs/PLAN.md, раздел «Zapret») и включает запасной режим через VPN.
 /// </summary>
 public sealed class Watchdog
 {

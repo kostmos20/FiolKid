@@ -447,6 +447,45 @@ public partial class MainWindow : Window
         Drift(BlobA, 140, 90, 17);
         Drift(BlobB, -160, -120, 21);
         Drift(BlobC, 180, -100, 25);
+
+        // Цвета перетекают по кругу: фиолетовый → синий → бирюзовый → розовый. У каждого элемента — свой
+        // сдвиг по времени, поэтому цвета не меняются хором, а «переливаются»
+        Color[] palette = [Color.FromRgb(0x8B, 0x5C, 0xF6), Color.FromRgb(0x3B, 0x82, 0xF6), Color.FromRgb(0x14, 0xB8, 0xA6), Color.FromRgb(0xEC, 0x48, 0x99)];
+        void Cycle(UIElement target, string brush, int stop, byte alpha, double seconds, double phase)
+        {
+            var animation = new ColorAnimationUsingKeyFrames { RepeatBehavior = RepeatBehavior.Forever, BeginTime = TimeSpan.FromSeconds(-phase) };
+            for (var i = 0; i <= palette.Length; i++)
+            {
+                var c = palette[i % palette.Length];
+                animation.KeyFrames.Add(new EasingColorKeyFrame(Color.FromArgb(alpha, c.R, c.G, c.B),
+                    KeyTime.FromTimeSpan(TimeSpan.FromSeconds(seconds * i / palette.Length)), new SineEase { EasingMode = EasingMode.EaseInOut }));
+            }
+            Storyboard.SetTarget(animation, target);
+            Storyboard.SetTargetProperty(animation, new PropertyPath($"({brush}).(GradientBrush.GradientStops)[{stop}].(GradientStop.Color)"));
+            board.Children.Add(animation);
+        }
+        Cycle(HaloGlow, "Shape.Fill", 0, 0xAA, 16, 0);
+        Cycle(HaloRing, "Shape.Stroke", 0, 0xFF, 12, 0);
+        Cycle(HaloRing, "Shape.Stroke", 1, 0xFF, 12, 4);
+        Cycle(HaloRing, "Shape.Stroke", 2, 0xFF, 12, 8);
+        Cycle(BlobA, "Shape.Fill", 0, 0x55, 30, 0);
+        Cycle(BlobB, "Shape.Fill", 0, 0x44, 30, 10);
+        Cycle(BlobC, "Shape.Fill", 0, 0x44, 30, 20);
+
+        // Кольцо вращается, свечение «дышит»
+        var turn = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(18)) { RepeatBehavior = RepeatBehavior.Forever };
+        Storyboard.SetTarget(turn, HaloRing);
+        Storyboard.SetTargetProperty(turn, new PropertyPath("RenderTransform.Angle"));
+        board.Children.Add(turn);
+        var breathe = new DoubleAnimation(0.4, 0.75, TimeSpan.FromSeconds(4))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+        };
+        Storyboard.SetTarget(breathe, HaloGlow);
+        Storyboard.SetTargetProperty(breathe, new PropertyPath(OpacityProperty));
+        board.Children.Add(breathe);
         return board;
     }
 }

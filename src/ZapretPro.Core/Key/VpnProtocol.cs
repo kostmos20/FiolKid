@@ -42,7 +42,7 @@ public static class VpnProtocolInfo
         _ => "неизвестный",
     };
 
-    /// <summary>Протоколы, для которых в этапе 3 есть ядро и раздельная маршрутизация (см. PLAN.md).</summary>
+    /// <summary>Протоколы, для которых в этапе 3 есть ядро и раздельная маршрутизация (см. docs/PLAN.md).</summary>
     public static bool IsSupported(VpnProtocol protocol) =>
         protocol is VpnProtocol.AmneziaXray or VpnProtocol.AmneziaWg;
 }
