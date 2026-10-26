@@ -28,6 +28,8 @@ public partial class MainWindow : Window
         _engine = engine;
         _pulse = BuildPulse();
         _spin = BuildSpin();
+        Funnel.Source = RainbowArt.Funnel(520);
+        RainbowRing.Stroke = RainbowArt.Ring(200);
         _aurora = BuildAurora();
         VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3)}";
 
@@ -363,6 +365,10 @@ public partial class MainWindow : Window
             }
             : new DoubleAnimation(0, duration));
 
+        // Включено — радуга ярче, выключено — приглушена
+        Funnel.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 0.8 : 0.55, duration));
+        RainbowRing.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 1 : 0.6, duration));
+
         PowerLabel.Text = on ? "ВЫКЛЮЧИТЬ" : "ВКЛЮЧИТЬ";
         PowerLabel.Opacity = on ? 0.85 : 1;
     }
@@ -464,28 +470,20 @@ public partial class MainWindow : Window
             Storyboard.SetTargetProperty(animation, new PropertyPath($"({brush}).(GradientBrush.GradientStops)[{stop}].(GradientStop.Color)"));
             board.Children.Add(animation);
         }
-        Cycle(HaloGlow, "Shape.Fill", 0, 0xAA, 16, 0);
-        Cycle(HaloRing, "Shape.Stroke", 0, 0xFF, 12, 0);
-        Cycle(HaloRing, "Shape.Stroke", 1, 0xFF, 12, 4);
-        Cycle(HaloRing, "Shape.Stroke", 2, 0xFF, 12, 8);
         Cycle(BlobA, "Shape.Fill", 0, 0x55, 30, 0);
         Cycle(BlobB, "Shape.Fill", 0, 0x44, 30, 10);
         Cycle(BlobC, "Shape.Fill", 0, 0x44, 30, 20);
 
-        // Кольцо вращается, свечение «дышит»
-        var turn = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(18)) { RepeatBehavior = RepeatBehavior.Forever };
-        Storyboard.SetTarget(turn, HaloRing);
-        Storyboard.SetTargetProperty(turn, new PropertyPath("RenderTransform.Angle"));
-        board.Children.Add(turn);
-        var breathe = new DoubleAnimation(0.4, 0.75, TimeSpan.FromSeconds(4))
+        // Радужная воронка медленно вращается, обводка кнопки — быстрее и в ту же сторону
+        void Spin(UIElement target, double seconds)
         {
-            AutoReverse = true,
-            RepeatBehavior = RepeatBehavior.Forever,
-            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-        };
-        Storyboard.SetTarget(breathe, HaloGlow);
-        Storyboard.SetTargetProperty(breathe, new PropertyPath(OpacityProperty));
-        board.Children.Add(breathe);
+            var turn = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(seconds)) { RepeatBehavior = RepeatBehavior.Forever };
+            Storyboard.SetTarget(turn, target);
+            Storyboard.SetTargetProperty(turn, new PropertyPath("RenderTransform.Angle"));
+            board.Children.Add(turn);
+        }
+        Spin(Funnel, 24);
+        Spin(RainbowRing, 8);
         return board;
     }
 }
