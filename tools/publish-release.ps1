@@ -25,7 +25,10 @@ if (-not $version) { throw 'Не нашёл <Version> в ZapretPro.App.csproj' }
 $tag = "v$version"
 
 if (git -C $root status --porcelain) { throw 'Есть несохранённые изменения — сначала git commit и git push' }
-if (gh release view $tag 2>$null) { throw "Выпуск $tag уже есть — подними версию в ZapretPro.App.csproj" }
+# Windows PowerShell считает сообщение gh об ошибке («release not found») исключением — ловим и смотрим на код выхода
+$released = $false
+try { gh release view $tag *> $null; $released = ($LASTEXITCODE -eq 0) } catch { $released = $false }
+if ($released) { throw "Выпуск $tag уже есть — подними версию в ZapretPro.App.csproj" }
 
 Write-Host "Собираю FiolKid $version…" -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'build.ps1')
