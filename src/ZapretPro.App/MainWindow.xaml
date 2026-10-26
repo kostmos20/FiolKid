@@ -220,6 +220,14 @@
         <Border Grid.Row="2" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,1,0,0" Padding="12,8,12,10"
                 Background="#661A2233">
             <Grid>
+                <!-- Новогоднее: сугроб вдоль верхнего края панели (под полоской выбранной вкладки) -->
+                <Path x:Name="TabSnow" VerticalAlignment="Top" Margin="-12,-9,-12,0" IsHitTestVisible="False"
+                      Visibility="Collapsed" Opacity="0.95">
+                    <Path.Effect>
+                        <DropShadowEffect ShadowDepth="1.5" Direction="270" BlurRadius="4" Opacity="0.35" Color="#FF000000"/>
+                    </Path.Effect>
+                </Path>
+
                 <!-- Светящаяся полоска над выбранной вкладкой, переезжает при переключении -->
                 <Border x:Name="TabIndicator" Height="3" Width="44" CornerRadius="2" VerticalAlignment="Top" HorizontalAlignment="Left"
                         Margin="0,-9,0,0" Background="{StaticResource AccentGradient}">

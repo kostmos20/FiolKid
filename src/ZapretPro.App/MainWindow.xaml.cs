@@ -69,7 +69,14 @@ public partial class MainWindow : Window
     public void ApplyNewYear(bool on)
     {
         _newYearOn = on;
-        Snow.Visibility = NewYearPanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Snow.Visibility = NewYearPanel.Visibility = TabSnow.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var card in new[] { YouTubeCard, DiscordCard, TelegramCard, AiCard })
+            card.Snowy = on;
+        if (on && TabSnow.Data is null)
+        {
+            TabSnow.Fill = NewYear.SnowBrush;
+            TabSnow.Data = NewYear.SnowCap(ActualWidth, 7, depth: 11);
+        }
         if (on)
         {
             CountdownText.Text = NewYear.Countdown(DateTime.Now);

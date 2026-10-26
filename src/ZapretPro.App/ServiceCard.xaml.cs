@@ -22,9 +22,20 @@ public partial class ServiceCard : UserControl
     public ServiceCard()
     {
         InitializeComponent();
-        // Сияние не должно вылезать за скруглённые углы карточки
+        // Сияние и снег не должны вылезать за скруглённые углы карточки
         Inner.SizeChanged += (_, e) =>
+        {
             Inner.Clip = new RectangleGeometry(new Rect(e.NewSize), 17, 17);
+            if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5)
+                SnowCap.Data = NewYear.SnowCap(e.NewSize.Width, TitleText.Text.Sum(c => c));
+        };
+        SnowCap.Fill = NewYear.SnowBrush;
+    }
+
+    /// <summary>Лежит ли снег на карточке (новогоднее оформление).</summary>
+    public bool Snowy
+    {
+        set => SnowCap.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
     }
 
     public string Title

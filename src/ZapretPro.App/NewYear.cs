@@ -108,6 +108,51 @@ public static class NewYear
     }
 
     /// <summary>
+    /// Лежащий снег: полоса во всю ширину с неровным нижним краем — бугорки разной высоты и пара
+    /// «сосулек». Одинаковое <paramref name="seed"/> даёт одинаковую форму, у каждого блока — своя.
+    /// </summary>
+    public static Geometry SnowCap(double width, int seed, double depth = 9)
+    {
+        var random = new Random(seed);
+        var points = new List<Point> { new(width, depth * 0.6) };
+        // Идём справа налево по нижнему краю: бугорки шириной 14–30 пикселей
+        var x = width;
+        while (x > 0)
+        {
+            x = Math.Max(0, x - (14 + random.NextDouble() * 16));
+            var y = depth * (0.35 + random.NextDouble() * 0.65);
+            // Изредка — капля-сосулька
+            if (x > 10 && random.NextDouble() < 0.12)
+                y = depth + 3 + random.NextDouble() * 3;
+            points.Add(new Point(x, y));
+        }
+
+        var figure = new PathFigure { StartPoint = new Point(0, -1), IsClosed = true, IsFilled = true };
+        figure.Segments.Add(new LineSegment(new Point(width, -1), true));
+        figure.Segments.Add(new LineSegment(points[0], true));
+        for (var i = 1; i < points.Count; i++)
+        {
+            // Плавная волна между точками: изгиб вниз, как у настоящего сугроба
+            var a = points[i - 1];
+            var b = points[i];
+            var control = new Point((a.X + b.X) / 2, Math.Max(a.Y, b.Y) + depth * 0.35);
+            figure.Segments.Add(new QuadraticBezierSegment(control, b, true));
+        }
+        var geometry = new PathGeometry([figure]);
+        geometry.Freeze();
+        return geometry;
+    }
+
+    /// <summary>Цвет снега: белый сверху, чуть голубоватый внизу — объём.</summary>
+    public static Brush SnowBrush { get; } = Freeze(new LinearGradientBrush(Color.FromRgb(0xFF, 0xFF, 0xFF), Color.FromRgb(0xD6, 0xE4, 0xF5), 90));
+
+    private static Brush Freeze(Brush brush)
+    {
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>
     /// Текст таймера. С 1 по 14 января — поздравление, остальное время — сколько осталось до 1 января.
     /// </summary>
     public static string Countdown(DateTime now)

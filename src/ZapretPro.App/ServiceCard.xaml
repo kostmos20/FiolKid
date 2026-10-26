@@ -58,6 +58,13 @@
                         HorizontalAlignment="Stretch" FontSize="16" Padding="12,8" Visibility="Collapsed"
                         Click="Action_Click"/>
             </Grid>
+
+            <!-- Новогоднее: сугроб на верхнем краю карточки (форму задаёт код по ширине) -->
+            <Path x:Name="SnowCap" VerticalAlignment="Top" IsHitTestVisible="False" Visibility="Collapsed" Opacity="0.95">
+                <Path.Effect>
+                    <DropShadowEffect ShadowDepth="1.5" Direction="270" BlurRadius="4" Opacity="0.35" Color="#FF000000"/>
+                </Path.Effect>
+            </Path>
         </Grid>
     </Border>
 </UserControl>
