@@ -196,11 +196,10 @@
                         <RowDefinition Height="12"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <local:ServiceCard x:Name="YouTubeCard" Grid.Row="0" Grid.Column="0" Title="YouTube" Glyph="▶" BadgeBrush="#FFE11D2A"/>
-                    <local:ServiceCard x:Name="DiscordCard" Grid.Row="0" Grid.Column="2" Title="Discord" Glyph="🎧" BadgeBrush="#FF5865F2"/>
-                    <local:ServiceCard x:Name="TelegramCard" Grid.Row="2" Grid.Column="0" Title="Telegram" Glyph="✈" BadgeBrush="#FF229ED9"/>
-                    <local:ServiceCard x:Name="AiCard" Grid.Row="2" Grid.Column="2" Title="Нейросети" Subtitle="и другие сайты" Glyph="✦"
-                                       BadgeBrush="#FF8B5CF6"/>
+                    <local:ServiceCard x:Name="YouTubeCard" Grid.Row="0" Grid.Column="0" Title="YouTube" Logo="YouTube" Accent="#FFEF4444"/>
+                    <local:ServiceCard x:Name="DiscordCard" Grid.Row="0" Grid.Column="2" Title="Discord" Logo="Discord" Accent="#FF7C83F7"/>
+                    <local:ServiceCard x:Name="TelegramCard" Grid.Row="2" Grid.Column="0" Title="Telegram" Logo="Telegram" Accent="#FF29A9EB"/>
+                    <local:ServiceCard x:Name="AiCard" Grid.Row="2" Grid.Column="2" Title="VPN" Logo="Stars" Accent="#FFFACC15"/>
                 </Grid>
             </Grid>
 

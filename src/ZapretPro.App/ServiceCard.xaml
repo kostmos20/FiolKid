@@ -1,7 +1,7 @@
 <UserControl x:Class="ZapretPro.App.ServiceCard"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Border Padding="16,14">
+    <Border x:Name="Frame" Padding="0">
         <Border.Style>
             <Style TargetType="Border" BasedOn="{StaticResource Card}">
                 <Style.Triggers>
@@ -12,33 +12,47 @@
                 </Style.Triggers>
             </Style>
         </Border.Style>
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <!-- Сияние обрезается по скруглённым углам карточки (обрезку задаёт код по размеру) -->
+        <Grid x:Name="Inner">
+            <!-- Мягкое сияние цвета сервиса за логотипом: дышит, пока подключаемся -->
+            <Ellipse x:Name="Glow" Width="190" Height="190" HorizontalAlignment="Left" VerticalAlignment="Top"
+                     Margin="-60,-75,0,0" Opacity="0" IsHitTestVisible="False" RenderTransformOrigin="0.5,0.5">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop x:Name="GlowColor" Color="#88EF4444" Offset="0"/>
+                        <GradientStop Color="#00000000" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+                <Ellipse.RenderTransform>
+                    <ScaleTransform/>
+                </Ellipse.RenderTransform>
+            </Ellipse>
 
-            <StackPanel Orientation="Horizontal">
-                <Border x:Name="Badge" Width="40" Height="40" CornerRadius="12">
-                    <TextBlock x:Name="GlyphText" FontSize="20" FontFamily="Segoe UI Symbol" Foreground="White"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                    <TextBlock x:Name="TitleText" FontSize="19" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="SubtitleText" FontSize="13" Foreground="{StaticResource MutedBrush}"
-                               Visibility="Collapsed"/>
+            <Grid Margin="16,14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Orientation="Horizontal">
+                    <Viewbox x:Name="LogoBox" Width="38" Height="38" VerticalAlignment="Center"/>
+                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="TitleText" FontSize="19" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="SubtitleText" FontSize="13" Foreground="{StaticResource MutedBrush}"
+                                   Visibility="Collapsed"/>
+                    </StackPanel>
                 </StackPanel>
-            </StackPanel>
 
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,14,0,0">
-                <Ellipse x:Name="Dot" Width="12" Height="12" VerticalAlignment="Center"/>
-                <TextBlock x:Name="StatusText" FontSize="18" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
-            </StackPanel>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,14,0,0">
+                    <Ellipse x:Name="Dot" Width="12" Height="12" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="StatusText" FontSize="18" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                </StackPanel>
 
-            <Button x:Name="ActionButton" Grid.Row="2" Style="{StaticResource PillButton}" Margin="0,12,0,0"
-                    HorizontalAlignment="Stretch" FontSize="16" Padding="12,8" Visibility="Collapsed"
-                    Click="Action_Click"/>
+                <Button x:Name="ActionButton" Grid.Row="2" Style="{StaticResource PillButton}" Margin="0,12,0,0"
+                        HorizontalAlignment="Stretch" FontSize="16" Padding="12,8" Visibility="Collapsed"
+                        Click="Action_Click"/>
+            </Grid>
         </Grid>
     </Border>
 </UserControl>
