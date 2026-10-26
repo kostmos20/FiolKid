@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -18,36 +18,57 @@ public static class NewYear
         Color.FromRgb(0x38, 0xBD, 0xF8), Color.FromRgb(0xF4, 0x72, 0xB6),
     ];
 
-    /// <summary>Снежинки: разного размера и скорости, падают с лёгким покачиванием.</summary>
-    public static void BuildSnow(Canvas canvas, Storyboard board, double width, double height, int count = 45)
+    private static readonly string[] FlakeShapes = ["❄", "❅", "❆"];
+
+    /// <summary>
+    /// Снег: узорчатые снежинки (❄ ❅ ❆) разного размера вперемешку с мелкими точками. Снежинки медленно
+    /// вращаются, всё падает с лёгким покачиванием; дальние — мельче, бледнее и медленнее.
+    /// </summary>
+    public static void BuildSnow(Canvas canvas, Storyboard board, double width, double height, int count = 55)
     {
         var random = new Random(2026);
         for (var i = 0; i < count; i++)
         {
-            var size = 2 + random.NextDouble() * 4;
-            var flake = new Ellipse
+            // Примерно каждая вторая — узорчатая снежинка, остальное — мелкий снег
+            var patterned = random.NextDouble() < 0.5;
+            var depth = random.NextDouble(); // 0 — далеко, 1 — близко
+            FrameworkElement flake;
+            if (patterned)
             {
-                Width = size,
-                Height = size,
-                Fill = Brushes.White,
-                Opacity = 0.35 + random.NextDouble() * 0.5,
-                IsHitTestVisible = false,
-            };
-            var shift = new TranslateTransform();
-            flake.RenderTransform = shift;
+                var size = 11 + depth * 12;
+                flake = new TextBlock
+                {
+                    Text = FlakeShapes[random.Next(FlakeShapes.Length)],
+                    FontFamily = new FontFamily("Segoe UI Symbol"),
+                    FontSize = size,
+                    Foreground = Brushes.White,
+                    Width = size * 1.2,
+                    Height = size * 1.4,
+                    TextAlignment = TextAlignment.Center,
+                };
+            }
+            else
+            {
+                var size = 2 + depth * 2.5;
+                flake = new Ellipse { Width = size, Height = size, Fill = Brushes.White };
+            }
+            flake.Opacity = 0.3 + depth * 0.55;
+            flake.IsHitTestVisible = false;
+            flake.RenderTransformOrigin = new Point(0.5, 0.5);
+            flake.RenderTransform = new TransformGroup { Children = { new RotateTransform(), new TranslateTransform() } };
             Canvas.SetLeft(flake, random.NextDouble() * width);
-            Canvas.SetTop(flake, -10);
+            Canvas.SetTop(flake, -24);
             canvas.Children.Add(flake);
 
-            // Крупные снежинки «ближе» — падают быстрее; начало сдвинуто, чтобы снег шёл сразу по всему окну
-            var fall = TimeSpan.FromSeconds(9 + (6 - size) * 2.2 + random.NextDouble() * 4);
-            var down = new DoubleAnimation(0, height + 20, fall)
+            // Ближние падают быстрее; начало сдвинуто, чтобы снег шёл сразу по всему окну
+            var fall = TimeSpan.FromSeconds(10 + (1 - depth) * 9 + random.NextDouble() * 4);
+            var down = new DoubleAnimation(0, height + 40, fall)
             {
                 RepeatBehavior = RepeatBehavior.Forever,
                 BeginTime = -TimeSpan.FromSeconds(random.NextDouble() * fall.TotalSeconds),
             };
             Storyboard.SetTarget(down, flake);
-            Storyboard.SetTargetProperty(down, new PropertyPath("RenderTransform.Y"));
+            Storyboard.SetTargetProperty(down, new PropertyPath("RenderTransform.Children[1].Y"));
             board.Children.Add(down);
 
             var sway = new DoubleAnimation(-12 - random.NextDouble() * 10, 12 + random.NextDouble() * 10, TimeSpan.FromSeconds(2.5 + random.NextDouble() * 2.5))
@@ -58,8 +79,21 @@ public static class NewYear
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
             Storyboard.SetTarget(sway, flake);
-            Storyboard.SetTargetProperty(sway, new PropertyPath("RenderTransform.X"));
+            Storyboard.SetTargetProperty(sway, new PropertyPath("RenderTransform.Children[1].X"));
             board.Children.Add(sway);
+
+            if (patterned)
+            {
+                var turn = random.NextDouble() < 0.5 ? 360 : -360;
+                var spin = new DoubleAnimation(0, turn, TimeSpan.FromSeconds(8 + random.NextDouble() * 10))
+                {
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    BeginTime = -TimeSpan.FromSeconds(random.NextDouble() * 8),
+                };
+                Storyboard.SetTarget(spin, flake);
+                Storyboard.SetTargetProperty(spin, new PropertyPath("RenderTransform.Children[0].Angle"));
+                board.Children.Add(spin);
+            }
         }
     }
 
@@ -271,7 +305,7 @@ public static class NewYear
             return "С Новым годом!";
         var left = new DateTime(now.Year + 1, 1, 1) - now;
         var days = left.Days;
-        return $"До Нового года: {days} {DaysWord(days)} {left.Hours:00}:{left.Minutes:00}:{left.Seconds:00}";
+        return $"До Нового года — {days} {DaysWord(days)} {left.Hours:00}:{left.Minutes:00}:{left.Seconds:00}";
     }
 
     internal static string DaysWord(int days) => (days % 100, days % 10) switch

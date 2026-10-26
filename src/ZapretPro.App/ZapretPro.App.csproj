@@ -12,7 +12,7 @@
     <RootNamespace>ZapretPro.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\fiolkid.ico</ApplicationIcon>
-    <Version>0.9.9</Version>
+    <Version>0.9.10</Version>
     <Product>FiolKid</Product>
   </PropertyGroup>
 
@@ -37,6 +37,8 @@
   <ItemGroup>
     <Resource Include="Assets\fiolkid.ico" />
     <Resource Include="Assets\fiolkid-256.png" />
+    <!-- Зимнее оформление (картинки Codex): tools\prepare-winter-assets.ps1 -->
+    <Resource Include="Assets\winter\*" />
   </ItemGroup>
 
   <ItemGroup>

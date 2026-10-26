@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using ZapretPro.Core.Health;
 using ZapretPro.Core.Key;
 using ZapretPro.Core.Vpn;
@@ -14,11 +14,9 @@ namespace ZapretPro.App;
 public partial class MainWindow : Window
 {
     private readonly AppEngine _engine;
-    private readonly Storyboard _pulse;
-    private readonly Storyboard _spin;
-    private readonly Storyboard _aurora;
+    private readonly Storyboard _blink;
     private bool _busy;
-    private bool _spinning;
+    private bool _blinking;
     private bool? _painted;
     private FrameworkElement? _page;
 
@@ -26,11 +24,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _engine = engine;
-        _pulse = BuildPulse();
-        _spin = BuildSpin();
-        Funnel.Source = RainbowArt.Funnel(520);
-        RainbowRing.Stroke = RainbowArt.Ring(200);
-        _aurora = BuildAurora();
+        _blink = BuildBlink();
         VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3)}";
 
         _engine.StatusChanged += () => Dispatcher.BeginInvoke(Refresh);
@@ -49,7 +43,6 @@ public partial class MainWindow : Window
             SelectTab(HomePage);
             Refresh();
             AnimateCardsIn();
-            _aurora.Begin(this, true);
             NewYear.BuildSnow(Snow, _newYear, ActualWidth, ActualHeight);
             NewYear.BuildGarland(Garland, _newYear, ActualWidth - 32);
             ApplyNewYear(_engine.Settings.NewYearTheme != false);
@@ -69,11 +62,9 @@ public partial class MainWindow : Window
     public void ApplyNewYear(bool on)
     {
         _newYearOn = on;
+        // Снежные шапки на плитках нарисованы в самих картинках, поэтому здесь только падающий снег,
+        // гирлянда, таймер и сугроб над вкладками
         Snow.Visibility = NewYearPanel.Visibility = TabSnow.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var card in new[] { YouTubeCard, DiscordCard, TelegramCard, AiCard })
-            card.Snowy = on;
-        if (on && TabSnow.Content is null)
-            TabSnow.Content = NewYear.CreateDrift(ActualWidth, 7, 20);
         if (on)
         {
             CountdownText.Text = NewYear.Countdown(DateTime.Now);
@@ -88,9 +79,8 @@ public partial class MainWindow : Window
     {
         if (Showing)
         {
-            _aurora.Resume(this);
-            if (_spinning)
-                _spin.Resume(this);
+            if (_blinking)
+                _blink.Resume(this);
             if (_newYearOn)
             {
                 _newYear.Resume(this);
@@ -99,8 +89,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            _aurora.Pause(this);
-            _spin.Pause(this);
+            _blink.Pause(this);
             _newYear.Pause(this);
             _countdown.Stop();
         }
@@ -110,18 +99,19 @@ public partial class MainWindow : Window
     private void LogTab_Click(object sender, RoutedEventArgs e) => SelectTab(LogTab);
     private void SettingsTab_Click(object sender, RoutedEventArgs e) => SelectTab(SettingsTab);
 
-    /// <summary>Показать одну из трёх вкладок: она плавно выезжает, полоска над вкладкой переезжает к ней.</summary>
+    /// <summary>Показать одну из трёх вкладок: она плавно выезжает, под значком вкладки — тёплая чёрточка.</summary>
     private void SelectTab(FrameworkElement page)
     {
-        var tabs = new (FrameworkElement Page, Button Button)[] { (HomePage, HomeTabButton), (LogTab, LogTabButton), (SettingsTab, SettingsTabButton) };
-        for (var i = 0; i < tabs.Length; i++)
+        var tabs = new (FrameworkElement Page, Button Button, FrameworkElement Mark)[]
         {
-            var (tab, button) = tabs[i];
+            (HomePage, HomeTabButton, HomeMark), (LogTab, LogTabButton, LogMark), (SettingsTab, SettingsTabButton, SettingsMark),
+        };
+        foreach (var (tab, button, mark) in tabs)
+        {
             var selected = tab == page;
             tab.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
-            button.Foreground = (Brush)FindResource(selected ? "LavenderBrush" : "MutedBrush");
-            if (selected)
-                MoveTabIndicator(i);
+            button.Foreground = (Brush)FindResource(selected ? "WinterWarm" : "WinterNav");
+            mark.Visibility = selected ? Visibility.Visible : Visibility.Hidden;
         }
         if (page == LogTab)
             LogTab.Refresh();
@@ -137,21 +127,6 @@ public partial class MainWindow : Window
             page.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)));
             shift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(260)) { EasingFunction = ease });
         }
-    }
-
-    private void MoveTabIndicator(int index)
-    {
-        TabBar.UpdateLayout();
-        var column = TabBar.ActualWidth / 3;
-        if (column <= 0)
-        {
-            // Окно ещё не разложено — подвинем, когда разложится
-            TabBar.Loaded += (_, _) => MoveTabIndicator(index);
-            return;
-        }
-        var x = column * index + (column - TabIndicator.Width) / 2;
-        TabIndicatorShift.BeginAnimation(TranslateTransform.XProperty,
-            new DoubleAnimation(x, TimeSpan.FromMilliseconds(280)) { EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.4 } });
     }
 
     /// <summary>Перерисовать всё по текущему состоянию.</summary>
@@ -179,57 +154,62 @@ public partial class MainWindow : Window
 
         (Headline.Text, Subline.Text) = (on, state) switch
         {
-            (false, _) => ("Выключено", "Нажми на кнопку, чтобы включить"),
+            (false, _) => ("Выключено", "Нажми на кнопку, чтобы включить FiolKid."),
             _ when status.NeedsReboot => ("Перезагрузи компьютер", "Драйвер обхода блокировок завис — после перезагрузки всё заработает"),
             (true, ZapretState.Searching) when status.Measuring
                 => ("Замеряю скорость…", $"Пробую способ {status.StrategyNumber} из {status.StrategyCount}, пару минут видео может подтормаживать"),
             (true, ZapretState.Searching) => ("Подбираю лучший способ…", "Это может занять пару минут"),
             (true, ZapretState.NoInternet) => ("Нет интернета", "Проверь, подключён ли компьютер к интернету"),
             _ when checking => ("Проверяю…", "Сейчас всё проверю"),
-            _ when problems == 0 => ("Всё работает", "Можно пользоваться"),
+            _ when connecting => ("Подключаем…", "Обычно это занимает несколько секунд."),
+            _ when problems == 0 => ("Всё работает", "Можно пользоваться привычными сервисами."),
             _ when looks[Service.Telegram] == ServiceLook.NeedsConnect && problems == 1
                 => ("Почти всё работает", "Осталось подключить Telegram — нажми «Подключить»"),
             _ => ("Почти всё работает", "Если не наладится само — открой «Журнал» и пришли отчёт"),
         };
 
         var busy = searching || checking || connecting;
-        var color = !on ? (Color)FindResource("BgBottomColor")
-            : busy ? (Color)FindResource("AccentColor")
-            : problems == 0 ? ((SolidColorBrush)FindResource("GreenBrush")).Color
-            : ((SolidColorBrush)FindResource("AmberBrush")).Color;
         PaintPower(on);
-        TitleDot.Fill = !on ? (Brush)FindResource("GrayBrush") : new SolidColorBrush(color);
+        PowerLabel.Text = !on ? "Включить" : searching || connecting ? "Подключаем…" : "Выключить";
+        ServicesSummary.Text = !on ? "Всё в одном месте"
+            : busy ? "Проверяем доступ"
+            : problems == 0 ? "Все сервисы доступны"
+            : "Не всё доступно";
 
+        // Вышло обновление — вместо тихой строки внизу ссылка на него
         if (_engine.Update is { } update)
         {
-            UpdateBanner.Visibility = Visibility.Visible;
-            UpdateText.Text = _engine.UpdateBusy ? _engine.UpdateStatus : $"Вышла версия {update.Version}";
+            FooterQuiet.Visibility = Visibility.Hidden;
+            UpdateButton.Visibility = Visibility.Visible;
+            UpdateText.Text = _engine.UpdateBusy ? _engine.UpdateStatus : $"Вышла версия {update.Version} — обновить";
             UpdateButton.IsEnabled = !_engine.UpdateBusy;
         }
         else
-            UpdateBanner.Visibility = Visibility.Collapsed;
+        {
+            FooterQuiet.Visibility = Visibility.Visible;
+            UpdateButton.Visibility = Visibility.Collapsed;
+        }
 
-        SetSpinning(busy);
-        if (searching)
-            _pulse.Begin(this, true);
-        else
-            _pulse.Stop(this);
+        SetBlinking(busy);
     }
 
-    private void SetSpinning(bool spinning)
+    /// <summary>Огонёк на кнопке мигает, пока подключаемся и проверяем.</summary>
+    private void SetBlinking(bool blinking)
     {
-        if (spinning == _spinning)
+        if (blinking == _blinking)
             return;
-        _spinning = spinning;
-        SpinRing.BeginAnimation(OpacityProperty, new DoubleAnimation(spinning ? 1 : 0, TimeSpan.FromMilliseconds(350)));
-        if (spinning)
+        _blinking = blinking;
+        if (blinking)
         {
-            _spin.Begin(this, true);
+            _blink.Begin(this, true);
             if (!Showing)
-                _spin.Pause(this);
+                _blink.Pause(this);
         }
         else
-            _spin.Stop(this);
+        {
+            _blink.Stop(this);
+            ButtonLight.Opacity = 0;
+        }
     }
 
     private async void Power_Click(object sender, RoutedEventArgs e)
@@ -238,7 +218,7 @@ public partial class MainWindow : Window
             return;
         _busy = true;
         PowerButton.IsEnabled = false;
-        Press(PowerButton);
+        Press(PowerShift);
         try
         {
             if (_engine.IsOn)
@@ -280,17 +260,14 @@ public partial class MainWindow : Window
         await ((App)Application.Current).InstallUpdateAsync(dir);
     }
 
-    /// <summary>Кнопка «проседает» и пружинит обратно.</summary>
-    private static void Press(UIElement element)
+    /// <summary>Кнопка чуть «вдавливается» вниз и возвращается.</summary>
+    private static void Press(TranslateTransform shift)
     {
-        if (element.RenderTransform is not ScaleTransform scale)
-            return;
-        var bounce = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420) };
-        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(0.93, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(90))));
-        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)),
-            new ElasticEase { Oscillations = 1, Springiness = 5 }));
-        scale.BeginAnimation(ScaleTransform.ScaleXProperty, bounce);
-        scale.BeginAnimation(ScaleTransform.ScaleYProperty, bounce);
+        var bounce = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(320) };
+        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(2, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(80))));
+        bounce.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(320)),
+            new CubicEase { EasingMode = EasingMode.EaseOut }));
+        shift.BeginAnimation(TranslateTransform.YProperty, bounce);
     }
 
     /// <summary>Telegram: подключить к прокси, а если прокси сломан — перезапустить его и подключить.</summary>
@@ -368,20 +345,15 @@ public partial class MainWindow : Window
             new DoubleAnimation(16, 0, TimeSpan.FromMilliseconds(320)) { EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.5 } });
     }
 
-    /// <summary>
-    /// Кнопка всегда тёмная с радужной обводкой. Включено — радуга яркая и значок белый, выключено —
-    /// радуга приглушена. Как дела у сервисов, говорят надпись под кнопкой и точка в заголовке.
-    /// </summary>
+    /// <summary>Кнопка-картинка: включено — цветная, выключено — приглушённая копия.</summary>
     private void PaintPower(bool on)
     {
         if (_painted == on)
             return;
         _painted = on;
-
-        var duration = TimeSpan.FromMilliseconds(450);
-        Funnel.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 0.8 : 0.5, duration));
-        RainbowRing.BeginAnimation(OpacityProperty, new DoubleAnimation(on ? 1 : 0.65, duration));
-        PowerIcon.Foreground = on ? Brushes.White : new SolidColorBrush(Color.FromRgb(0xCB, 0xD5, 0xE1));
+        PowerButton.ApplyTemplate();
+        if (PowerButton.Template.FindName("Plate", PowerButton) is Image plate)
+            plate.Source = new BitmapImage(new Uri($"pack://application:,,,/FiolKid;component/Assets/winter/button-{(on ? "on" : "off")}.png"));
     }
 
     /// <summary>Карточки сервисов появляются по очереди, снизу вверх.</summary>
@@ -401,91 +373,19 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Кольцо вокруг кнопки расходится и гаснет — «идёт работа».</summary>
-    private Storyboard BuildPulse()
+    /// <summary>Огонёк справа на кнопке мягко загорается и гаснет.</summary>
+    private Storyboard BuildBlink()
     {
+        ButtonLight.Fill = new SolidColorBrush(Color.FromRgb(0xB3, 0xC8, 0xAC));
         var board = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
-        var duration = new Duration(TimeSpan.FromSeconds(1.6));
-
-        foreach (var axis in new[] { "ScaleX", "ScaleY" })
+        var blink = new DoubleAnimation(0.2, 1, TimeSpan.FromSeconds(0.8))
         {
-            var scale = new DoubleAnimation(0.84, 1.0, duration) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
-            Storyboard.SetTarget(scale, PulseRing);
-            Storyboard.SetTargetProperty(scale, new PropertyPath($"RenderTransform.{axis}"));
-            board.Children.Add(scale);
-        }
-
-        var fade = new DoubleAnimation(0.9, 0, duration);
-        Storyboard.SetTarget(fade, PulseRing);
-        Storyboard.SetTargetProperty(fade, new PropertyPath(OpacityProperty));
-        board.Children.Add(fade);
-        return board;
-    }
-
-    /// <summary>Дуга бежит по кругу вокруг кнопки.</summary>
-    private Storyboard BuildSpin()
-    {
-        var board = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
-        var rotate = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(2.2));
-        Storyboard.SetTarget(rotate, SpinRing);
-        Storyboard.SetTargetProperty(rotate, new PropertyPath("RenderTransform.Angle"));
-        board.Children.Add(rotate);
-        return board;
-    }
-
-    /// <summary>Цветные пятна фона медленно плавают — каждое по своей траектории и со своей скоростью.</summary>
-    private Storyboard BuildAurora()
-    {
-        var board = new Storyboard();
-        void Drift(UIElement blob, double dx, double dy, double seconds)
-        {
-            foreach (var (axis, distance) in new[] { ("X", dx), ("Y", dy) })
-            {
-                var move = new DoubleAnimation(0, distance, TimeSpan.FromSeconds(axis == "X" ? seconds : seconds * 1.37))
-                {
-                    AutoReverse = true,
-                    RepeatBehavior = RepeatBehavior.Forever,
-                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-                };
-                Storyboard.SetTarget(move, blob);
-                Storyboard.SetTargetProperty(move, new PropertyPath($"RenderTransform.{axis}"));
-                board.Children.Add(move);
-            }
-        }
-        Drift(BlobA, 140, 90, 17);
-        Drift(BlobB, -160, -120, 21);
-        Drift(BlobC, 180, -100, 25);
-
-        // Цвета перетекают по кругу: фиолетовый → синий → бирюзовый → розовый. У каждого элемента — свой
-        // сдвиг по времени, поэтому цвета не меняются хором, а «переливаются»
-        Color[] palette = [Color.FromRgb(0x8B, 0x5C, 0xF6), Color.FromRgb(0x3B, 0x82, 0xF6), Color.FromRgb(0x14, 0xB8, 0xA6), Color.FromRgb(0xEC, 0x48, 0x99)];
-        void Cycle(UIElement target, string brush, int stop, byte alpha, double seconds, double phase)
-        {
-            var animation = new ColorAnimationUsingKeyFrames { RepeatBehavior = RepeatBehavior.Forever, BeginTime = TimeSpan.FromSeconds(-phase) };
-            for (var i = 0; i <= palette.Length; i++)
-            {
-                var c = palette[i % palette.Length];
-                animation.KeyFrames.Add(new EasingColorKeyFrame(Color.FromArgb(alpha, c.R, c.G, c.B),
-                    KeyTime.FromTimeSpan(TimeSpan.FromSeconds(seconds * i / palette.Length)), new SineEase { EasingMode = EasingMode.EaseInOut }));
-            }
-            Storyboard.SetTarget(animation, target);
-            Storyboard.SetTargetProperty(animation, new PropertyPath($"({brush}).(GradientBrush.GradientStops)[{stop}].(GradientStop.Color)"));
-            board.Children.Add(animation);
-        }
-        Cycle(BlobA, "Shape.Fill", 0, 0x55, 30, 0);
-        Cycle(BlobB, "Shape.Fill", 0, 0x44, 30, 10);
-        Cycle(BlobC, "Shape.Fill", 0, 0x44, 30, 20);
-
-        // Радужная воронка медленно вращается, обводка кнопки — быстрее и в ту же сторону
-        void Spin(UIElement target, double seconds)
-        {
-            var turn = new DoubleAnimation(0, 360, TimeSpan.FromSeconds(seconds)) { RepeatBehavior = RepeatBehavior.Forever };
-            Storyboard.SetTarget(turn, target);
-            Storyboard.SetTargetProperty(turn, new PropertyPath("RenderTransform.Angle"));
-            board.Children.Add(turn);
-        }
-        Spin(Funnel, 24);
-        Spin(RainbowRing, 8);
+            AutoReverse = true,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+        };
+        Storyboard.SetTarget(blink, ButtonLight);
+        Storyboard.SetTargetProperty(blink, new PropertyPath(OpacityProperty));
+        board.Children.Add(blink);
         return board;
     }
 }
