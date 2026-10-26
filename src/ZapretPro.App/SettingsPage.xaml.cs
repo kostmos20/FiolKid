@@ -55,6 +55,7 @@ public partial class SettingsPage : UserControl
             RefreshServers();
             RefreshStrategies();
             RefreshTelegram();
+            NewYearSwitch.IsChecked = _engine.Settings.NewYearTheme != false;
             _autostart ??= _engine.AutostartEnabled;
             AutostartSwitch.IsChecked = _autostart;
             RefreshUpdates();
@@ -434,6 +435,15 @@ public partial class SettingsPage : UserControl
         VpnText.Text = "Проверяю…";
         await _engine.CheckNowAsync();
         Refresh();
+    }
+
+    private void NewYear_Click(object sender, RoutedEventArgs e)
+    {
+        var on = NewYearSwitch.IsChecked == true;
+        _engine.SetNewYearTheme(on);
+        if (Window.GetWindow(this) is MainWindow main)
+            main.ApplyNewYear(on);
+        Toast?.Invoke(on ? "С наступающим! Снег пошёл" : "Новогоднее оформление выключено");
     }
 
     private void Autostart_Click(object sender, RoutedEventArgs e)

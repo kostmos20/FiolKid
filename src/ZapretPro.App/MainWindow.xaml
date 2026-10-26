@@ -100,7 +100,16 @@
                 </Grid.RowDefinitions>
 
                 <!-- Кнопка питания и общее состояние -->
-                <StackPanel Margin="0,8,0,0">
+                <StackPanel Margin="0,0,0,0">
+                    <!-- Новогоднее: гирлянда и таймер до Нового года -->
+                    <StackPanel x:Name="NewYearPanel">
+                        <Canvas x:Name="Garland" Height="34" Margin="16,0" IsHitTestVisible="False"/>
+                        <Border HorizontalAlignment="Center" Margin="0,-4,0,0" Padding="14,5" CornerRadius="13"
+                                Background="#33FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
+                            <TextBlock x:Name="CountdownText" FontSize="14" Foreground="{StaticResource TextBrush}"/>
+                        </Border>
+                    </StackPanel>
+
                     <Grid Width="240" Height="240" HorizontalAlignment="Center">
                         <!-- Радужная воронка: цветной круг, гаснущий к краям, медленно вращается из-за кнопки.
                              В Canvas нулевого размера — чтобы большой круг не обрезался по размеру ячейки -->
@@ -246,6 +255,9 @@
                 </UniformGrid>
             </Grid>
         </Border>
+
+        <!-- Новогоднее: снег падает по всему окну, поверх всего, но не мешает нажимать -->
+        <Canvas x:Name="Snow" Grid.RowSpan="3" ClipToBounds="True" IsHitTestVisible="False"/>
 
         <!-- Всплывающая подсказка снизу («Отчёт скопирован» и т. п.) -->
         <Border x:Name="Toast" Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center"

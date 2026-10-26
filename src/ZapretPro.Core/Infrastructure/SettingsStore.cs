@@ -39,6 +39,9 @@ public sealed class AppSettings
     /// <summary>Сервер подписки, выбранный вручную, — по отпечатку <c>ProxyServer.Key</c> (без адреса и пароля).</summary>
     public string? ManualServerKey { get; set; }
 
+    /// <summary>Новогоднее оформление: снег, гирлянда, таймер. Null — включено.</summary>
+    public bool? NewYearTheme { get; set; }
+
     /// <summary>Последний замер серверов подписки (без адресов и паролей).</summary>
     public DateTimeOffset? ServerBenchmarkAt { get; set; }
     public List<Vpn.ServerScore>? ServerBenchmark { get; set; }

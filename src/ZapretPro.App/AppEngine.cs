@@ -546,6 +546,8 @@ public sealed class AppEngine
 
     public AppSettings Settings => _settings.Load();
 
+    public void SetNewYearTheme(bool on) => _settings.Update(s => s.NewYearTheme = on);
+
     /// <summary>Сменить режим выбора альта. Если программа включена — применяется сразу.</summary>
     public void SetStrategyMode(string mode, string? manualId)
     {

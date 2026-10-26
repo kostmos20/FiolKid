@@ -136,7 +136,10 @@
             <!-- Запуск и журнал -->
             <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                 <StackPanel>
-                    <TextBlock Text="Запуск и отчёты" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock Text="Оформление, запуск и отчёты" Style="{StaticResource SectionTitle}"/>
+                    <CheckBox x:Name="NewYearSwitch" Style="{StaticResource Switch}" Margin="0,12,0,0" Click="NewYear_Click">
+                        <TextBlock Text="Новогоднее оформление: снег, гирлянда и таймер" FontSize="16" TextWrapping="Wrap"/>
+                    </CheckBox>
                     <CheckBox x:Name="AutostartSwitch" Style="{StaticResource Switch}" Margin="0,12,0,0" Click="Autostart_Click">
                         <TextBlock Text="Запускать вместе с Windows (сразу возле часов)" FontSize="16" TextWrapping="Wrap"/>
                     </CheckBox>

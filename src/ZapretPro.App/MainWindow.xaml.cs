@@ -42,12 +42,17 @@ public partial class MainWindow : Window
         LogTab.Toast += ShowToast;
         SettingsTab.Toast += ShowToast;
 
+        _countdown.Tick += (_, _) => CountdownText.Text = NewYear.Countdown(DateTime.Now);
+
         Loaded += (_, _) =>
         {
             SelectTab(HomePage);
             Refresh();
             AnimateCardsIn();
             _aurora.Begin(this, true);
+            NewYear.BuildSnow(Snow, _newYear, ActualWidth, ActualHeight);
+            NewYear.BuildGarland(Garland, _newYear, ActualWidth - 32);
+            ApplyNewYear(_engine.Settings.NewYearTheme != false);
         };
         // Окно спрятано в трей или свёрнуто — анимации стоят и не тратят процессор
         IsVisibleChanged += (_, _) => UpdateAnimationsRunning();
@@ -56,6 +61,25 @@ public partial class MainWindow : Window
 
     private bool Showing => IsVisible && WindowState != WindowState.Minimized;
 
+    private readonly Storyboard _newYear = new();
+    private readonly System.Windows.Threading.DispatcherTimer _countdown = new() { Interval = TimeSpan.FromSeconds(1) };
+    private bool _newYearOn;
+
+    /// <summary>Включить или выключить новогоднее оформление (переключатель в настройках).</summary>
+    public void ApplyNewYear(bool on)
+    {
+        _newYearOn = on;
+        Snow.Visibility = NewYearPanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        if (on)
+        {
+            CountdownText.Text = NewYear.Countdown(DateTime.Now);
+            _newYear.Begin(this, true);
+        }
+        else
+            _newYear.Stop(this);
+        UpdateAnimationsRunning();
+    }
+
     private void UpdateAnimationsRunning()
     {
         if (Showing)
@@ -63,11 +87,18 @@ public partial class MainWindow : Window
             _aurora.Resume(this);
             if (_spinning)
                 _spin.Resume(this);
+            if (_newYearOn)
+            {
+                _newYear.Resume(this);
+                _countdown.Start();
+            }
         }
         else
         {
             _aurora.Pause(this);
             _spin.Pause(this);
+            _newYear.Pause(this);
+            _countdown.Stop();
         }
     }
 
