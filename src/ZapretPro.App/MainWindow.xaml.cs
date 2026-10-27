@@ -64,7 +64,8 @@ public partial class MainWindow : Window
         _newYearOn = on;
         // Снежные шапки на плитках нарисованы в самих картинках, поэтому здесь только падающий снег,
         // гирлянда, таймер и сугроб над вкладками
-        Snow.Visibility = NewYearPanel.Visibility = TabSnow.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Garland.Visibility = NewYearPanel.Visibility = TabSnow.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSnow();
         if (on)
         {
             CountdownText.Text = NewYear.Countdown(DateTime.Now);
@@ -74,6 +75,9 @@ public partial class MainWindow : Window
             _newYear.Stop(this);
         UpdateAnimationsRunning();
     }
+
+    private void UpdateSnow() =>
+        Snow.Visibility = _newYearOn && HomePage.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
 
     private void UpdateAnimationsRunning()
     {
@@ -113,6 +117,15 @@ public partial class MainWindow : Window
             button.Foreground = (Brush)FindResource(selected ? "WinterWarm" : "WinterNav");
             mark.Visibility = selected ? Visibility.Visible : Visibility.Hidden;
         }
+        // Не на главной улица уходит в тень и размывается, гирлянда тускнеет, а снег не идёт — читаемость важнее
+        var home = page == HomePage;
+        var fade = TimeSpan.FromMilliseconds(300);
+        Scene.BeginAnimation(OpacityProperty, new DoubleAnimation(home ? 1 : 0.42, fade));
+        SceneBlur.BeginAnimation(System.Windows.Media.Effects.BlurEffect.RadiusProperty, new DoubleAnimation(home ? 0 : 3, fade));
+        SubShade.BeginAnimation(OpacityProperty, new DoubleAnimation(home ? 0 : 1, fade));
+        Garland.BeginAnimation(OpacityProperty, new DoubleAnimation(home ? 1 : 0.4, fade));
+        UpdateSnow();
+
         if (page == LogTab)
             LogTab.Refresh();
         if (page == SettingsTab)

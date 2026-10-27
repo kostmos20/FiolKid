@@ -59,7 +59,10 @@
         </Grid.RowDefinitions>
 
         <!-- Фон: зимняя улица и затемнение книзу, чтобы текст и плитки читались -->
-        <Rectangle Grid.RowSpan="3" IsHitTestVisible="False">
+        <Rectangle x:Name="Scene" Grid.RowSpan="3" IsHitTestVisible="False">
+            <Rectangle.Effect>
+                <BlurEffect x:Name="SceneBlur" Radius="0"/>
+            </Rectangle.Effect>
             <Rectangle.Fill>
                 <ImageBrush ImageSource="Assets/winter/background.jpg" Stretch="UniformToFill" AlignmentY="Center"/>
             </Rectangle.Fill>
@@ -75,6 +78,19 @@
                 </LinearGradientBrush>
             </Rectangle.Fill>
         </Rectangle>
+        <!-- На «Журнале» и «Настройках» улица уходит в тень, чтобы панели читались -->
+        <Rectangle x:Name="SubShade" Grid.RowSpan="3" IsHitTestVisible="False" Opacity="0">
+            <Rectangle.Fill>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#BB191B26" Offset="0"/>
+                    <GradientStop Color="#ED1B1D27" Offset="0.35"/>
+                    <GradientStop Color="#FA171B25" Offset="1"/>
+                </LinearGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+
+        <!-- Новогоднее: гирлянда над всеми вкладками (на главной — ярче) -->
+        <Canvas x:Name="Garland" Grid.Row="1" Height="34" Margin="16,2,16,0" VerticalAlignment="Top" IsHitTestVisible="False"/>
 
         <!-- Заголовок окна -->
         <Border Grid.Row="0" Background="#80171923" BorderBrush="#07FFFFFF" BorderThickness="0,0,0,1">
@@ -96,10 +112,9 @@
         <Grid x:Name="Pages" Grid.Row="1">
             <!-- Главная: всё по координатам макета (верх страницы = 43 пикселя от верха окна) -->
             <Canvas x:Name="HomePage">
-                <!-- Новогоднее: гирлянда и таймер -->
-                <StackPanel x:Name="NewYearPanel" Width="500">
-                    <Canvas x:Name="Garland" Height="34" Margin="16,2,16,0" IsHitTestVisible="False"/>
-                    <Border HorizontalAlignment="Center" Margin="0,7,0,0" Padding="13,6" CornerRadius="16"
+                <!-- Новогоднее: таймер до Нового года -->
+                <StackPanel x:Name="NewYearPanel" Width="500" Canvas.Top="43">
+                    <Border HorizontalAlignment="Center" Padding="13,6" CornerRadius="16"
                             Background="#8C24212B" BorderBrush="#2BE3D3B8" BorderThickness="1">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="✧" FontSize="15" Foreground="#FFE2BD82" VerticalAlignment="Center" Margin="0,-2,7,0"/>
@@ -210,8 +225,8 @@
                 </StackPanel>
             </Canvas>
 
-            <local:LogPage x:Name="LogTab" Visibility="Collapsed"/>
-            <local:SettingsPage x:Name="SettingsTab" Visibility="Collapsed"/>
+            <local:LogPage x:Name="LogTab" Margin="0,36,0,17" Visibility="Collapsed"/>
+            <local:SettingsPage x:Name="SettingsTab" Margin="0,36,0,17" Visibility="Collapsed"/>
         </Grid>
 
         <!-- Вкладки: тёмная панель со снежной шапкой сверху -->

@@ -2,183 +2,445 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <UserControl.Resources>
-        <!-- BasedOn — иначе свой стиль заменяет общий и текст становится чёрным по умолчанию -->
-        <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-            <Setter Property="FontSize" Value="20"/>
+        <!-- Заголовок панели: значок в тёплой рамке, название, подпись и номер справа -->
+        <Style x:Key="PanelTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="17"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
+        <Style x:Key="PanelSub" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#FFACAFBB"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+        <Style x:Key="PanelNumber" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#FF8F8C90"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="IconBox" TargetType="Border">
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="CornerRadius" Value="11"/>
+            <Setter Property="BorderBrush" Value="#24BBA78A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Margin" Value="0,0,11,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#55594C3C" Offset="0"/>
+                        <GradientStop Color="#602E3039" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PanelIcon" TargetType="Path">
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="Stroke" Value="#FFD5BA91"/>
+            <Setter Property="StrokeThickness" Value="1.5"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+        </Style>
+        <Style x:Key="ButtonIcon" TargetType="Path">
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="StrokeThickness" Value="1.7"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        </Style>
         <Style x:Key="Hint" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="LineHeight" Value="20"/>
             <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,10,0,0"/>
         </Style>
-        <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-            <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="FontSize" Value="15"/>
+        <Style x:Key="Caption" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="LineHeight" Value="17"/>
+            <Setter Property="Foreground" Value="#FFAEB0BC"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,10,0,0"/>
         </Style>
-        <!-- Строка списка: слева название, справа результат замера -->
+        <Style x:Key="SwitchTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Foreground" Value="#FFE0DFE3"/>
+        </Style>
+        <Style x:Key="SwitchSub" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#FFA9ADBA"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="ButtonRow" TargetType="WrapPanel">
+            <Setter Property="Margin" Value="0,14,0,0"/>
+        </Style>
+        <!-- Быстрый переход к разделу -->
+        <Style x:Key="Jump" TargetType="Button">
+            <Setter Property="Foreground" Value="#FFC6BEB2"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,6,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="20" Padding="11,7" Background="#6939373D" BorderBrush="#24B5A386" BorderThickness="1">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#3B6D5B44"/>
+                                <Setter Property="Foreground" Value="#FFEAD1AC"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Строка списка: код страны (у серверов), название с пометкой и результат замера справа -->
         <DataTemplate x:Key="ScoreRow">
             <DockPanel>
-                <TextBlock DockPanel.Dock="Right" Text="{Binding Right}" FontSize="13" Foreground="{Binding RightBrush}"
-                           VerticalAlignment="Center" Margin="10,0,0,0"/>
-                <StackPanel>
-                    <TextBlock Text="{Binding Title}" FontSize="15" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Text="{Binding Note}" FontSize="12" Foreground="{StaticResource MutedBrush}"
+                <TextBlock DockPanel.Dock="Right" Text="{Binding Right}" FontSize="10.5" LineHeight="16" Foreground="{Binding RightBrush}"
+                           VerticalAlignment="Center" Margin="10,0,0,0" MaxWidth="150" TextAlignment="Right" TextWrapping="Wrap"/>
+                <Border DockPanel.Dock="Left" Width="27" Height="27" CornerRadius="8" Background="#06FFFFFF" BorderBrush="#08FFFFFF"
+                        BorderThickness="1" Margin="0,0,9,0" Visibility="{Binding BadgeVisibility}">
+                    <TextBlock Text="{Binding Badge}" FontSize="9.5" FontWeight="SemiBold" Foreground="#FFBDB9B3"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Text="{Binding Note}" FontSize="10.5" Foreground="#FF9CA5B3" Margin="0,2,0,0"
                                Visibility="{Binding NoteVisibility}"/>
                 </StackPanel>
             </DockPanel>
         </DataTemplate>
     </UserControl.Resources>
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="20,4,20,16">
-            <TextBlock Text="Настройки" FontSize="28" FontWeight="SemiBold" Margin="0,0,0,16"/>
+    <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="Panels" Margin="24,0,24,20">
+            <TextBlock Text="ТВОЙ FIOLKID" FontSize="10" FontWeight="SemiBold" Foreground="#FFC9B397" Margin="0,0,0,10"/>
+            <TextBlock Text="Настройки" FontSize="30" FontWeight="SemiBold"/>
+            <TextBlock FontSize="12.5" Foreground="#FFC1C0C7" Margin="0,10,0,20" LineHeight="20" TextWrapping="Wrap"
+                       Text="Подключение, поведение и немного зимы.&#10;Всё нужное — в одном месте."/>
+            <WrapPanel Margin="0,0,0,12">
+                <Button Style="{StaticResource Jump}" Content="Подключение" Tag="{Binding ElementName=KeyPanel}" Click="Jump_Click"/>
+                <Button Style="{StaticResource Jump}" Content="Способ обхода" Tag="{Binding ElementName=StrategyPanel}" Click="Jump_Click"/>
+                <Button Style="{StaticResource Jump}" Content="Оформление" Tag="{Binding ElementName=AppearancePanel}" Click="Jump_Click"/>
+                <Button Style="{StaticResource Jump}" Content="О программе" Tag="{Binding ElementName=UpdatesPanel}" Click="Jump_Click"/>
+            </WrapPanel>
 
-            <!-- Ключ Amnezia -->
-            <Border Style="{StaticResource Card}">
+            <!-- 01 Ключ Amnezia -->
+            <Border x:Name="KeyPanel" Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Ключ Amnezia" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock Text="Ключ из приложения Amnezia VPN, начинается с vpn://" Style="{StaticResource Hint}" Margin="0,4,0,12"/>
-                    <DockPanel>
-                        <Ellipse x:Name="KeyDot" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="KeyText" FontSize="17" Margin="8,0,0,0" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    <DockPanel Margin="0,0,0,17">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}" Data="M13 9a5 5 0 1 1-10 0a5 5 0 1 1 10 0ZM12 13l8 8m-4-4 3-3m-6 0 3-3"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="01" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Ключ Amnezia" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Подключение по ключу VPN" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
                     </DockPanel>
-                    <WrapPanel Margin="0,12,0,0">
-                        <Button x:Name="PasteKeyButton" Style="{StaticResource PillButton}" Content="Вставить ключ" Margin="0,0,8,0"
+                    <DockPanel>
+                        <Ellipse x:Name="KeyDot" Width="5" Height="5" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="KeyText" FontSize="13" Margin="7,0,0,1" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Hint}">
+                        <Run Text="Ключ из Amnezia VPN, начинается с "/><Run Text="vpn://" FontFamily="Consolas" Foreground="#FFDBC6A6"/>
+                    </TextBlock>
+                    <WrapPanel Style="{StaticResource ButtonRow}">
+                        <Button x:Name="PasteKeyButton" Style="{StaticResource PillButton}" Content="Вставить ключ" Margin="0,0,9,0"
                                 Click="PasteKey_Click"/>
-                        <Button x:Name="DeleteKeyButton" Style="{StaticResource SmallButton}" Content="Удалить" Click="DeleteKey_Click"/>
+                        <Button x:Name="DeleteKeyButton" Style="{StaticResource DangerButton}" Content="Удалить" Click="DeleteKey_Click"/>
                     </WrapPanel>
                 </StackPanel>
             </Border>
 
-            <!-- Подписка -->
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+            <!-- 02 Подписка -->
+            <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Подписка" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock Text="Ссылка вида https://… со списком серверов (Швеция, Германия, Нидерланды…)" Style="{StaticResource Hint}"
-                               Margin="0,4,0,12"/>
-                    <DockPanel>
-                        <Ellipse x:Name="SubscriptionDot" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="SubscriptionText" FontSize="17" Margin="8,0,0,0" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    <DockPanel Margin="0,0,0,17">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}"
+                                  Data="M11.5 11.9 14.9 8.5M8.9 13.6l-1.7 1.7a3.4 3.4 0 0 1-5.1-5.1l3.4-3.4a3.4 3.4 0 0 1 5.1 0M12.3 13.6a3.4 3.4 0 0 0 5.1 0l3.4-3.4a3.4 3.4 0 0 0-5.1-5.1l-1.7 1.7"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="02" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Подписка" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Одна ссылка — несколько серверов" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
                     </DockPanel>
-                    <WrapPanel Margin="0,12,0,0">
-                        <Button x:Name="PasteSubscriptionButton" Style="{StaticResource PillButton}" Content="Вставить ссылку" Margin="0,0,8,0"
+                    <DockPanel>
+                        <Ellipse x:Name="SubscriptionDot" Width="5" Height="5" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SubscriptionText" FontSize="13" Margin="7,0,0,1" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Hint}">
+                        <Run Text="Ссылка "/><Run Text="https://…" FontFamily="Consolas" Foreground="#FFDBC6A6"/><Run
+                             Text=" со списком серверов. Ключ Amnezia и подписку можно использовать вместе."/>
+                    </TextBlock>
+                    <WrapPanel Style="{StaticResource ButtonRow}">
+                        <Button x:Name="PasteSubscriptionButton" Style="{StaticResource PillButton}" Content="Вставить ссылку" Margin="0,0,9,0"
                                 Click="PasteSubscription_Click"/>
-                        <Button x:Name="DeleteSubscriptionButton" Style="{StaticResource SmallButton}" Content="Удалить"
+                        <Button x:Name="DeleteSubscriptionButton" Style="{StaticResource DangerButton}" Content="Удалить"
                                 Click="DeleteSubscription_Click"/>
                     </WrapPanel>
 
-                    <StackPanel x:Name="ServersPanel" Margin="0,16,0,0">
-                        <CheckBox x:Name="ServerAutoSwitch" Style="{StaticResource Switch}" Click="ServerAuto_Click">
-                            <TextBlock Text="Сам выбирать самый быстрый сервер" FontSize="16" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="ServersPanel">
+                        <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Margin="0,18,0,0"/>
+                        <CheckBox x:Name="ServerAutoSwitch" Style="{StaticResource Switch}" Click="ServerAuto_Click" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Выбирать самый быстрый" Style="{StaticResource SwitchTitle}"/>
+                                <TextBlock Text="Автоматический подбор сервера" Style="{StaticResource SwitchSub}"/>
+                            </StackPanel>
                         </CheckBox>
-                        <TextBlock x:Name="ServersHint" Style="{StaticResource Hint}" Margin="0,6,0,8"/>
+                        <TextBlock x:Name="ServersHint" Style="{StaticResource Hint}" Margin="0,14,0,4"/>
                         <ListBox x:Name="ServersList" ItemContainerStyle="{StaticResource RowItem}" ItemTemplate="{StaticResource ScoreRow}"
-                                 Background="Transparent" BorderThickness="0" MaxHeight="260"
+                                 Background="Transparent" BorderThickness="0" MaxHeight="290" Margin="0,0,0,13"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="ServersList_SelectionChanged"/>
-                        <Button x:Name="MeasureServersButton" Style="{StaticResource SmallButton}" Content="Замерить серверы"
-                                HorizontalAlignment="Left" Margin="0,8,0,0" Click="MeasureServers_Click"/>
+                        <Button x:Name="MeasureServersButton" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
+                                Click="MeasureServers_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource ButtonIcon}" Data="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/>
+                                <TextBlock x:Name="MeasureServersText" Text="Замерить серверы"/>
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="Задержка, скорость и страна выхода" Style="{StaticResource Caption}"/>
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- VPN -->
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+            <!-- 03 VPN -->
+            <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Подключение VPN" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock Text="Если вставлены и ключ, и подписка, программа сама берёт тот, что работает быстрее."
-                               Style="{StaticResource Hint}" Margin="0,4,0,0"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                        <Ellipse x:Name="VpnDot" Width="12" Height="12" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="VpnText" FontSize="18" Margin="8,0,0,0" TextWrapping="Wrap"/>
-                    </StackPanel>
-                    <TextBlock x:Name="VpnHint" Style="{StaticResource Hint}" FontSize="15" Margin="0,6,0,0" Visibility="Collapsed"/>
-                    <Button x:Name="ReconnectButton" Style="{StaticResource SmallButton}" Content="Проверить снова"
-                            HorizontalAlignment="Left" Margin="0,14,0,0" Click="Reconnect_Click"/>
+                    <DockPanel Margin="0,0,0,17">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}" Data="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6ZM8 12l3 3 5-6"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="03" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Подключение VPN" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Состояние туннеля" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <DockPanel>
+                        <Ellipse x:Name="VpnDot" Width="5" Height="5" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="VpnText" FontSize="13" Margin="7,0,0,1" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock x:Name="VpnHint" Style="{StaticResource Hint}" Foreground="#FFE0ACA6" Visibility="Collapsed"/>
+                    <TextBlock Text="Если добавлены и ключ, и подписка, FiolKid сам выберет тот, что работает быстрее." Style="{StaticResource Hint}"/>
+                    <Button x:Name="ReconnectButton" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                            Click="Reconnect_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ButtonIcon}" Data="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/>
+                            <TextBlock Text="Проверить снова"/>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Border>
 
-            <!-- Альты zapret -->
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+            <!-- 04 Альты zapret -->
+            <Border x:Name="StrategyPanel" Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="YouTube и Discord: способ обхода" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock Text="Способов (альтов) много: одни работают быстрее, другие медленнее. Выбери, как подбирать."
-                               Style="{StaticResource Hint}" Margin="0,4,0,10"/>
-                    <WrapPanel>
-                        <RadioButton x:Name="ModeFirst" Style="{StaticResource Segment}" GroupName="Mode" Content="Первый рабочий" Click="Mode_Click"/>
-                        <RadioButton x:Name="ModeFastest" Style="{StaticResource Segment}" GroupName="Mode" Content="Самый быстрый" Click="Mode_Click"/>
-                        <RadioButton x:Name="ModeManual" Style="{StaticResource Segment}" GroupName="Mode" Content="Выбрать вручную" Click="Mode_Click"/>
+                    <DockPanel Margin="0,0,0,17">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}" Data="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="04" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Способ обхода" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="YouTube и Discord · zapret" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <Border CornerRadius="12" Padding="4" Background="#69191E27" BorderBrush="#09FFFFFF" BorderThickness="1">
+                        <UniformGrid Columns="3">
+                            <RadioButton x:Name="ModeFirst" Style="{StaticResource Segment}" GroupName="Mode" Click="Mode_Click" Margin="0,0,3,0">
+                                <TextBlock Text="Первый&#10;рабочий" TextAlignment="Center" LineHeight="15"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"/>
+                            </RadioButton>
+                            <RadioButton x:Name="ModeFastest" Style="{StaticResource Segment}" GroupName="Mode" Click="Mode_Click" Margin="0,0,3,0">
+                                <TextBlock Text="Самый&#10;быстрый" TextAlignment="Center" LineHeight="15"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"/>
+                            </RadioButton>
+                            <RadioButton x:Name="ModeManual" Style="{StaticResource Segment}" GroupName="Mode" Click="Mode_Click">
+                                <TextBlock Text="Выбрать&#10;вручную" TextAlignment="Center" LineHeight="15"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}"/>
+                            </RadioButton>
+                        </UniformGrid>
+                    </Border>
+                    <TextBlock x:Name="ModeHint" Style="{StaticResource Hint}"/>
+                    <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Margin="0,14,0,14" Padding="0,10,0,0">
+                        <Expander x:Name="StrategiesExpander" Style="{StaticResource Disclosure}">
+                            <Expander.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Все способы" Foreground="#FFB9BBC7" FontSize="12"/>
+                                    <Border CornerRadius="5" Background="#08FFFFFF" Padding="6,1" Margin="6,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="StrategiesCount" FontSize="10" Foreground="#FFB9BBC7"/>
+                                    </Border>
+                                </StackPanel>
+                            </Expander.Header>
+                            <ListBox x:Name="StrategiesList" ItemContainerStyle="{StaticResource RowItem}" ItemTemplate="{StaticResource ScoreRow}"
+                                     Background="Transparent" BorderThickness="0" MaxHeight="300" Margin="0,4,0,0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="StrategiesList_SelectionChanged"/>
+                        </Expander>
+                    </Border>
+                    <Button x:Name="BenchmarkButton" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Click="Benchmark_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ButtonIcon}" Data="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/>
+                            <TextBlock x:Name="BenchmarkText" Text="Замерить скорость альтов"/>
+                        </StackPanel>
+                    </Button>
+                    <TextBlock x:Name="BenchmarkCaption" Style="{StaticResource Caption}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 05 Telegram -->
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,7">
+                        <Border Style="{StaticResource IconBox}" Background="#107299BC">
+                            <Path Style="{StaticResource PanelIcon}" Stroke="#FF94C5DF" Data="m3 14 26-10-6 25-9-8-6 4 2-8zm7 3L24 9 14 21"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="05" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Telegram" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Локальный прокси для мессенджера" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <TextBlock x:Name="TelegramText" Style="{StaticResource Hint}"/>
+                    <WrapPanel Style="{StaticResource ButtonRow}">
+                        <Button Style="{StaticResource PillButton}" Content="Подключить Telegram" Margin="0,0,9,0" Click="ConnectTelegram_Click"/>
+                        <Button x:Name="RestartProxyButton" Style="{StaticResource SecondaryButton}" Width="36" Padding="0"
+                                ToolTip="Перезапустить прокси" AutomationProperties.Name="Перезапустить прокси" Click="RestartProxy_Click">
+                            <Path Style="{StaticResource ButtonIcon}" Margin="0" Data="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/>
+                        </Button>
                     </WrapPanel>
-                    <TextBlock x:Name="ModeHint" Style="{StaticResource Hint}" Margin="0,4,0,8"/>
-                    <ListBox x:Name="StrategiesList" ItemContainerStyle="{StaticResource RowItem}" ItemTemplate="{StaticResource ScoreRow}"
-                             Background="Transparent" BorderThickness="0" MaxHeight="300"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="StrategiesList_SelectionChanged"/>
-                    <Button x:Name="BenchmarkButton" Style="{StaticResource SmallButton}" Content="Замерить скорость альтов"
-                            HorizontalAlignment="Left" Margin="0,8,0,0" Click="Benchmark_Click"/>
+                    <TextBlock Text="«Подключить» открывает Telegram, и он предложит добавить прокси — нажми там «Подключить». Кнопка со стрелкой перезапускает прокси."
+                               Style="{StaticResource Caption}"/>
                 </StackPanel>
             </Border>
 
-            <!-- Telegram -->
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+            <!-- 06 Оформление и запуск -->
+            <Border x:Name="AppearancePanel" Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Telegram" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock x:Name="TelegramText" FontSize="16" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                    <WrapPanel Margin="0,12,0,0">
-                        <Button Style="{StaticResource PillButton}" Content="Подключить Telegram" Margin="0,0,8,8" Click="ConnectTelegram_Click"/>
-                        <Button x:Name="RestartProxyButton" Style="{StaticResource SmallButton}" Content="Перезапустить прокси" Margin="0,0,0,8"
-                                Click="RestartProxy_Click"/>
-                    </WrapPanel>
-                    <TextBlock Text="«Подключить» открывает Telegram и предлагает добавить прокси — нажми там «Подключить». Если Telegram закрыт, он откроется сам."
-                               Style="{StaticResource Hint}"/>
-                </StackPanel>
-            </Border>
-
-            <!-- Запуск и журнал -->
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                <StackPanel>
-                    <TextBlock Text="Оформление, запуск и отчёты" Style="{StaticResource SectionTitle}"/>
-                    <CheckBox x:Name="NewYearSwitch" Style="{StaticResource Switch}" Margin="0,12,0,0" Click="NewYear_Click">
-                        <TextBlock Text="Новогоднее оформление: снег, гирлянда и таймер" FontSize="16" TextWrapping="Wrap"/>
+                    <DockPanel Margin="0,0,0,5">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}"
+                                  Data="M12 2v20M3.3 7l17.4 10M3.3 17 20.7 7M9 4l3 3 3-3M9 20l3-3 3 3M3 10l4-1-1-4m12 14-1-4 4-1M6 19l1-4-4-1m18-4-4-1 1-4"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="06" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Оформление и запуск" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Пусть будет удобно и уютно" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <CheckBox x:Name="NewYearSwitch" Style="{StaticResource Switch}" Margin="0,12" Click="NewYear_Click">
+                        <StackPanel>
+                            <TextBlock Text="Новогоднее оформление" Style="{StaticResource SwitchTitle}"/>
+                            <TextBlock Text="Снег, гирлянда и таймер" Style="{StaticResource SwitchSub}"/>
+                        </StackPanel>
                     </CheckBox>
+                    <Border BorderBrush="#0BFFFFFF" BorderThickness="0,1,0,0"/>
                     <CheckBox x:Name="AutostartSwitch" Style="{StaticResource Switch}" Margin="0,12,0,0" Click="Autostart_Click">
-                        <TextBlock Text="Запускать вместе с Windows (сразу возле часов)" FontSize="16" TextWrapping="Wrap"/>
+                        <StackPanel>
+                            <TextBlock Text="Запускать вместе с Windows" Style="{StaticResource SwitchTitle}"/>
+                            <TextBlock Text="Сразу возле часов, без лишнего окна" Style="{StaticResource SwitchSub}"/>
+                        </StackPanel>
                     </CheckBox>
-                    <TextBlock x:Name="LogPathText" Style="{StaticResource Hint}" Margin="0,12,0,0"/>
-                    <Button x:Name="SaveReportButton" Style="{StaticResource SmallButton}" Content="Сохранить отчёт на рабочий стол"
-                            HorizontalAlignment="Left" Margin="0,10,0,0" Click="SaveReport_Click"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 07 Журнал и отчёты -->
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,7">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}"
+                                  Data="M8 3h10a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM5 7H3m2 5H3m2 5H3m6-10h7m-7 5h7m-7 5h4"/>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Right" Text="07" Style="{StaticResource PanelNumber}"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Журнал и отчёты" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Информация для диагностики" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <TextBlock Text="Журнал программы хранится 7 дней. В отчёт не попадают ключи и ссылки на подписку." Style="{StaticResource Hint}"/>
+                    <Border CornerRadius="9" Padding="11,10" Margin="0,14,0,14" Background="{StaticResource WellBrush}" BorderBrush="#08FFFFFF"
+                            BorderThickness="1">
+                        <DockPanel>
+                            <Path Style="{StaticResource PanelIcon}" Width="13" Height="13" Stroke="#FFAEB6C5" Margin="0,0,8,0" VerticalAlignment="Top"
+                                  Data="M8 3h10a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM5 7H3m2 5H3m2 5H3m6-10h7m-7 5h7m-7 5h4"/>
+                            <TextBlock x:Name="LogPathText" FontFamily="Consolas" FontSize="10.5" Foreground="#FFAEB6C5" TextWrapping="Wrap"/>
+                        </DockPanel>
+                    </Border>
+                    <Button x:Name="SaveReportButton" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Click="SaveReport_Click"
+                            ToolTip="Сохранить отчёт на рабочий стол">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource ButtonIcon}" Data="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>
+                            <TextBlock x:Name="SaveReportText" Text="Сохранить отчёт"/>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Border>
 
             <!-- Обновления и версии -->
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+            <Border x:Name="UpdatesPanel" Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Обновления" Style="{StaticResource SectionTitle}"/>
-                    <TextBlock x:Name="UpdateStatusText" FontSize="16" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="UpdateNotesText" Style="{StaticResource Hint}" Margin="0,4,0,0" Visibility="Collapsed"/>
-                    <WrapPanel Margin="0,10,0,0">
-                        <Button x:Name="InstallUpdateButton" Style="{StaticResource PillButton}" Content="Обновить" Margin="0,0,8,8"
+                    <DockPanel Margin="0,0,0,7">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}" Data="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>
+                        </Border>
+                        <Border DockPanel.Dock="Right" CornerRadius="6" Padding="7,5" BorderBrush="#26B7A486" Background="#0AB7A486"
+                                BorderThickness="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="VersionPill" FontSize="9" FontWeight="SemiBold" Foreground="#FFCFBB9C"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Обновления" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock x:Name="VersionSub" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Hint}"/>
+                    <TextBlock x:Name="UpdateNotesText" Style="{StaticResource Hint}" Visibility="Collapsed"/>
+                    <WrapPanel Style="{StaticResource ButtonRow}">
+                        <Button x:Name="InstallUpdateButton" Style="{StaticResource PillButton}" Content="Обновить" Margin="0,0,9,8"
                                 Visibility="Collapsed" Click="InstallUpdate_Click"/>
-                        <Button x:Name="CheckUpdateButton" Style="{StaticResource SmallButton}" Content="Проверить обновления" Margin="0,0,0,8"
-                                Click="CheckUpdate_Click"/>
+                        <Button x:Name="CheckUpdateButton" Style="{StaticResource SecondaryButton}" Margin="0,0,0,8" Click="CheckUpdate_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Style="{StaticResource ButtonIcon}" Data="M20 10a8 8 0 1 0-2 8M20 4v6h-6"/>
+                                <TextBlock Text="Проверить обновления"/>
+                            </StackPanel>
+                        </Button>
                     </WrapPanel>
-                    <TextBlock Text="Обновления берутся только с официальной страницы программы на GitHub и проверяются по подписи автора. Ключ, подписка и настройки при обновлении сохраняются."
-                               Style="{StaticResource Hint}"/>
-
-                    <TextBlock Text="Что внутри" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,0"/>
-                    <ItemsControl x:Name="VersionsList" Margin="0,10,0,0">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <DockPanel Margin="0,4">
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Item2}" FontSize="14"
-                                               Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" MaxWidth="220"
-                                               TextAlignment="Right"/>
-                                    <TextBlock Text="{Binding Item1}" FontSize="15"/>
-                                </DockPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Text="Список заблокированных сайтов обновляется сам раз в сутки."
-                               Style="{StaticResource Hint}" Margin="0,10,0,0"/>
+                    <TextBlock Text="Обновления берутся только с официальной страницы программы на GitHub и проверяются по подписи автора. Ключ, подписка и настройки сохраняются."
+                               Style="{StaticResource Caption}"/>
+                    <Border BorderBrush="#0BFFFFFF" BorderThickness="0,1,0,0" Margin="0,17,0,0" Padding="0,12,0,0">
+                        <Expander Style="{StaticResource Disclosure}" Header="Что внутри">
+                            <ItemsControl x:Name="VersionsList" Margin="0,8,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="#07FFFFFF" BorderThickness="0,0,0,1" Padding="0,8">
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding Item2}" FontFamily="Consolas" FontSize="11.5"
+                                                           Foreground="#FFB9AB94" TextWrapping="Wrap" MaxWidth="220" TextAlignment="Right"/>
+                                                <TextBlock Text="{Binding Item1}" FontSize="12" Foreground="#FFC6C8D0"/>
+                                            </DockPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Expander>
+                    </Border>
+                    <TextBlock Text="Список заблокированных сайтов обновляется сам раз в сутки." Style="{StaticResource Caption}"/>
                 </StackPanel>
             </Border>
         </StackPanel>

@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using ZapretPro.Core.Health;
@@ -10,7 +10,8 @@ namespace ZapretPro.App;
 
 /// <summary>
 /// Вкладка «Настройки»: ключ Amnezia и подписка (каждый своей кнопкой — чтобы ключи разных сервисов не
-/// путались), выбор сервера и способа обхода, Telegram, запуск с Windows, отчёты. Простым языком, крупно.
+/// путались), выбор сервера и способа обхода, Telegram, запуск с Windows, отчёты. Одна прокручиваемая страница
+/// с быстрыми переходами к разделам.
 /// </summary>
 public partial class SettingsPage : UserControl
 {
@@ -31,17 +32,18 @@ public partial class SettingsPage : UserControl
     /// <summary>Сообщение для всплывающей подсказки главного окна.</summary>
     public event Action<string>? Toast;
 
-    /// <summary>Строка списка альтов или серверов.</summary>
-    public sealed record Row(string Key, string Title, string? Note, string Right, Brush RightBrush)
+    /// <summary>Строка списка альтов или серверов. Badge — код страны сервера.</summary>
+    public sealed record Row(string Key, string Title, string? Note, string Right, Brush RightBrush, string? Badge = null)
     {
         public Visibility NoteVisibility => string.IsNullOrEmpty(Note) ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility BadgeVisibility => string.IsNullOrEmpty(Badge) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     public void Init(AppEngine engine)
     {
         _engine = engine;
         _engine.StatusChanged += () => Dispatcher.BeginInvoke(Refresh);
-        LogPathText.Text = $"Журнал за последние 7 дней хранится в файлах: {_engine.LogFolder}";
+        LogPathText.Text = _engine.LogFolder;
         Refresh();
     }
 
@@ -74,7 +76,7 @@ public partial class SettingsPage : UserControl
     {
         var (keyOk, keyText) = _engine.KeyState();
         KeyText.Text = keyText;
-        KeyDot.Fill = Brush(keyOk ? "GreenBrush" : _engine.Keys.HasKey ? "RedBrush" : "GrayBrush");
+        SetState(KeyDot, KeyText, keyOk ? "Green" : _engine.Keys.HasKey ? "Red" : "Gray");
         DeleteKeyButton.Visibility = _engine.Keys.HasKey ? Visibility.Visible : Visibility.Collapsed;
         if (!_confirmDelete)
             DeleteKeyButton.Content = "Удалить";
@@ -82,7 +84,7 @@ public partial class SettingsPage : UserControl
 
         var (subOk, subText) = _engine.SubscriptionState();
         SubscriptionText.Text = subText;
-        SubscriptionDot.Fill = Brush(subOk ? "GreenBrush" : _engine.Subscriptions.HasSubscription ? "RedBrush" : "GrayBrush");
+        SetState(SubscriptionDot, SubscriptionText, subOk ? "Green" : _engine.Subscriptions.HasSubscription ? "Red" : "Gray");
         DeleteSubscriptionButton.Visibility = _engine.Subscriptions.HasSubscription ? Visibility.Visible : Visibility.Collapsed;
         if (!_confirmDeleteSubscription)
             DeleteSubscriptionButton.Content = "Удалить";
@@ -175,14 +177,15 @@ public partial class SettingsPage : UserControl
                   "Перед подключением программа меряет все серверы и берёт самые быстрые. Серверы с выходом из России для нейросетей не берёт."
                 : "Подключаюсь только к выбранному серверу. Нажми на другой, чтобы сменить.";
         MeasureServersButton.IsEnabled = !measuring;
-        MeasureServersButton.Content = measuring ? "Замеряю…" : "Замерить серверы";
+        MeasureServersText.Text = measuring ? "Замеряю…" : "Замерить серверы";
 
         var rows = servers.Select(x => new Row(
             x.Server.Key,
             x.Server.Name,
             $"{x.Server.Protocol}{(chosen.Contains(x.Server.Name) ? " · подключено" : "")}",
             ScoreText(x.Score),
-            ScoreBrush(x.Score))).ToList();
+            ScoreBrush(x.Score),
+            x.Score?.Country)).ToList();
         var signature = string.Join("|", rows.Select(r => $"{r.Key}{r.Note}{r.Right}"));
         if (signature != _serversShown)
         {
@@ -256,6 +259,9 @@ public partial class SettingsPage : UserControl
         ModeFirst.IsChecked = mode == StrategyModes.FirstWorking;
         ModeFastest.IsChecked = mode == StrategyModes.Fastest;
         ModeManual.IsChecked = mode == StrategyModes.Manual;
+        // В ручном режиме список нужен сразу — раскрываем его
+        if (mode == StrategyModes.Manual)
+            StrategiesExpander.IsExpanded = true;
         var status = _engine.Status;
         ModeHint.Text = mode switch
         {
@@ -287,6 +293,7 @@ public partial class SettingsPage : UserControl
             var brush = b is null || b.Milliseconds == -2 ? "MutedBrush" : b.Ok == b.Total ? "GreenBrush" : b.Ok > 0 ? "AmberBrush" : "RedBrush";
             return new Row(id, id, string.Join(" · ", notes), right, Brush(brush));
         }).ToList();
+        StrategiesCount.Text = rows.Count.ToString();
         var signature = string.Join("|", rows.Select(r => $"{r.Key}{r.Note}{r.Right}"));
         if (signature != _strategiesShown)
         {
@@ -297,8 +304,8 @@ public partial class SettingsPage : UserControl
         StrategiesList.SelectedItem = rows.FirstOrDefault(r => r.Key == selected);
 
         BenchmarkButton.IsEnabled = _engine.IsOn && !status.Measuring;
-        BenchmarkButton.Content = status.Measuring ? $"Замеряю… {status.StrategyNumber} из {status.StrategyCount}"
-            : _engine.IsOn ? "Замерить скорость альтов" : "Замерить скорость (сначала включи программу)";
+        BenchmarkText.Text = status.Measuring ? $"Замеряю… {status.StrategyNumber} из {status.StrategyCount}" : "Замерить скорость альтов";
+        BenchmarkCaption.Text = _engine.IsOn ? "Пару минут YouTube и Discord могут подтормаживать" : "Доступно, когда FiolKid включён";
     }
 
     private void Mode_Click(object sender, RoutedEventArgs e)
@@ -343,7 +350,9 @@ public partial class SettingsPage : UserControl
     private void RefreshUpdates()
     {
         var update = _engine.Update;
-        UpdateStatusText.Text = $"Версия {typeof(SettingsPage).Assembly.GetName().Version?.ToString(3)}. {_engine.UpdateStatus}";
+        VersionSub.Text = $"FiolKid {typeof(SettingsPage).Assembly.GetName().Version?.ToString(3)}";
+        VersionPill.Text = update is null ? "ТЕКУЩАЯ" : "ЕСТЬ НОВАЯ";
+        UpdateStatusText.Text = _engine.UpdateStatus;
         UpdateNotesText.Text = update?.Notes is { Length: > 0 } notes ? $"Что нового: {notes}" : "";
         UpdateNotesText.Visibility = string.IsNullOrEmpty(UpdateNotesText.Text) ? Visibility.Collapsed : Visibility.Visible;
         InstallUpdateButton.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
@@ -383,7 +392,7 @@ public partial class SettingsPage : UserControl
                 _ => ("Подключаюсь…", "AmberBrush"),
             };
         VpnText.Text = text;
-        VpnDot.Fill = Brush(color);
+        SetState(VpnDot, VpnText, color.Replace("Brush", ""));
         var hint = _engine.IsOn && vpn.State is not (VpnState.Connected or VpnState.NoKey) ? vpn.Error : null;
         VpnHint.Text = hint;
         VpnHint.Visibility = hint is null ? Visibility.Collapsed : Visibility.Visible;
@@ -459,7 +468,7 @@ public partial class SettingsPage : UserControl
     private async void SaveReport_Click(object sender, RoutedEventArgs e)
     {
         SaveReportButton.IsEnabled = false;
-        SaveReportButton.Content = "Собираю отчёт…";
+        SaveReportText.Text = "Собираю отчёт…";
         try
         {
             var path = await _engine.SaveReportAsync();
@@ -472,8 +481,24 @@ public partial class SettingsPage : UserControl
         finally
         {
             SaveReportButton.IsEnabled = true;
-            SaveReportButton.Content = "Сохранить отчёт на рабочий стол";
+            SaveReportText.Text = "Сохранить отчёт";
         }
+    }
+
+    /// <summary>Быстрый переход: прокрутить к разделу (кнопка хранит его в Tag).</summary>
+    private void Jump_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: FrameworkElement panel })
+            return;
+        var y = panel.TransformToAncestor(Panels).Transform(new Point()).Y;
+        Scroller.ScrollToVerticalOffset(Math.Max(0, y - 10));
+    }
+
+    /// <summary>Строка состояния: точка своего цвета и текст чуть светлее (серый — обычный приглушённый).</summary>
+    private void SetState(System.Windows.Shapes.Ellipse dot, TextBlock text, string color)
+    {
+        dot.Fill = Brush(color + "Brush");
+        text.Foreground = Brush(color == "Gray" ? "MutedBrush" : color + "TextBrush");
     }
 
     private Brush Brush(string key) => (Brush)FindResource(key);
