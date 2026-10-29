@@ -487,7 +487,7 @@ $RECYCLE.BIN/
 publish/
 
 # Правило *.app выше задевает папку проекта на Windows
-!/src/ZapretPro.App/
+!/PC/src/ZapretPro.App/
 
 # Готовые exe из build.ps1
 dist/
@@ -496,9 +496,12 @@ dist/
 third_party/
 
 # Архив для отправки из build.ps1
-/*.zip
+/PC/*.zip
 
 # Подписанное описание выпуска — создаётся tools\publish-release.ps1
-/FiolKid-update.json
-/FiolKid-update.json.sig
-/release/
+/PC/FiolKid-update.json
+/PC/FiolKid-update.json.sig
+/PC/release/
+
+# Версия для Android — отдельный репозиторий kostmos20/FiolKid-Android
+/Android/
