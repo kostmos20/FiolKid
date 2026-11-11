@@ -50,6 +50,8 @@ public sealed class TrayIcon : IDisposable
         _icon.BalloonTipClicked += (_, _) => open();
 
         _engine.StatusChanged += () => System.Windows.Application.Current.Dispatcher.BeginInvoke(Update);
+        _engine.Notice += message => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+            _icon.ShowBalloonTip(8000, "FiolKid", message, Forms.ToolTipIcon.Info));
         _engine.UpdateFound += update => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
             _icon.ShowBalloonTip(10000, $"Вышла версия FiolKid {update.Version}",
                 "Нажми сюда и потом «Обновить» на главном экране. Ключ и настройки сохранятся.", Forms.ToolTipIcon.Info));
@@ -81,6 +83,9 @@ public sealed class TrayIcon : IDisposable
             _ => "FiolKid — не всё работает",
         };
         _toggle.Text = _engine.IsOn ? "Выключить" : "Включить";
+        // Подсказка у значка не длиннее 63 символов — иначе Windows её не покажет
+        if (_engine.IsOn && _engine.GameModeText is { } gameMode)
+            _icon.Text = gameMode.Length <= 63 ? gameMode : gameMode[..60] + "…";
 
         // Драйвер zapret завис — ждать пять минут бессмысленно, само не пройдёт: говорим сразу
         var needsReboot = _engine.IsOn && _engine.Status.NeedsReboot;

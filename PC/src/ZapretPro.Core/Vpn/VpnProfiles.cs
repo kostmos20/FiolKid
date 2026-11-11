@@ -112,6 +112,9 @@ public sealed class SubscriptionProfile : IVpnProfile
 
     public event Action<string>? Log;
 
+    /// <summary>Идёт игра в игровом режиме: список серверов не обновлять и серверы не замерять — подождёт.</summary>
+    public Func<bool> Hold { get; set; } = () => false;
+
     public string Id => "subscription";
     public string Name => Info?.Title is { Length: > 0 } title ? $"подписка «{title}»" : "подписка";
     public bool Configured => _store.HasSubscription;
@@ -133,7 +136,7 @@ public sealed class SubscriptionProfile : IVpnProfile
 
         var cache = _store.LoadCache();
         var stale = cache is null || _time.GetUtcNow() - cache.FetchedAt >= (Info?.UpdateInterval ?? TimeSpan.FromHours(3));
-        if (stale && _time.GetUtcNow() >= _retryFetchAt)
+        if (stale && _time.GetUtcNow() >= _retryFetchAt && !Hold())
         {
             try
             {
@@ -201,7 +204,8 @@ public sealed class SubscriptionProfile : IVpnProfile
             var scores = settings.ServerBenchmark;
             var fresh = scores is { Count: > 0 } && settings.ServerBenchmarkAt is { } at && _time.GetUtcNow() - at < BenchmarkLifetime
                         && scores.All(s => keys.Contains(s.Key));
-            if (!fresh && _benchmark is not null)
+            // Замер гоняет трафик через каждый сервер — во время игры не надо
+            if (!fresh && _benchmark is not null && !(Hold() && scores is { Count: > 0 }))
                 scores = (await MeasureAsync(servers, ct))?.ToList() ?? scores;
             var best = ServerBenchmark.Best(scores ?? []).Select(k => servers.FirstOrDefault(s => s.Key == k)).OfType<ProxyServer>().ToList();
             if (best.Count > 0)

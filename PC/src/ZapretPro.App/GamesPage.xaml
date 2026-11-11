@@ -1,0 +1,125 @@
+<UserControl x:Class="ZapretPro.App.GamesPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="PanelTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style x:Key="PanelSub" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#FFACAFBB"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+        <Style x:Key="IconBox" TargetType="Border">
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="CornerRadius" Value="11"/>
+            <Setter Property="BorderBrush" Value="#24BBA78A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Margin" Value="0,0,11,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#55594C3C" Offset="0"/>
+                        <GradientStop Color="#602E3039" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PanelIcon" TargetType="Path">
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="Stroke" Value="#FFD5BA91"/>
+            <Setter Property="StrokeThickness" Value="1.5"/>
+            <Setter Property="StrokeStartLineCap" Value="Round"/>
+            <Setter Property="StrokeEndLineCap" Value="Round"/>
+            <Setter Property="StrokeLineJoin" Value="Round"/>
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="LineHeight" Value="20"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,10,0,0"/>
+        </Style>
+        <Style x:Key="SwitchTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Foreground" Value="#FFE0DFE3"/>
+        </Style>
+        <Style x:Key="SwitchSub" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#FFA9ADBA"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Margin" Value="0,0,8,0"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24,0,24,20">
+            <TextBlock Text="ТВОИ ИГРЫ" FontSize="10" FontWeight="SemiBold" Foreground="#FFC9B397" Margin="0,0,0,10"/>
+            <TextBlock Text="Игры" FontSize="30" FontWeight="SemiBold"/>
+            <TextBlock FontSize="12.5" Foreground="#FFC1C0C7" Margin="0,10,0,20" LineHeight="20" TextWrapping="Wrap"
+                       Text="Чтобы из игры не выкидывало и нужные игры шли через VPN.&#10;Запускай игры как обычно — FiolKid заметит сам."/>
+
+            <!-- Игровой режим -->
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,17">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}"
+                                  Data="M7 9h4M9 7v4M15 10h.01M18 8h.01M6.5 5h11A4.5 4.5 0 0 1 22 9.5v3.2a3.3 3.3 0 0 1-6 1.9L15 13H9l-1 1.6a3.3 3.3 0 0 1-6-1.9V9.5A4.5 4.5 0 0 1 6.5 5Z"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Игровой режим" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Любые игры, а не только из списка" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <CheckBox x:Name="GameModeSwitch" Style="{StaticResource Switch}" Click="GameMode_Click">
+                        <StackPanel>
+                            <TextBlock Text="Не переключать ничего во время игры" Style="{StaticResource SwitchTitle}"/>
+                            <TextBlock Text="Пока запущена игра, FiolKid ничего не переключает, чтобы не выкинуло из игры" Style="{StaticResource SwitchSub}"/>
+                        </StackPanel>
+                    </CheckBox>
+                    <DockPanel Margin="0,14,0,0">
+                        <Ellipse x:Name="ModeDot" Width="5" Height="5" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="ModeText" FontSize="12.5" Margin="7,0,0,1" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Hint}"
+                               Text="Игрой считается всё из папок Steam, Epic, Battle.net, Riot и других, игры из списка ниже и любое полноэкранное приложение. Когда игра закроется, отложенное (замеры, обновления) выполнится сразу."/>
+                </StackPanel>
+            </Border>
+
+            <!-- Игры через VPN -->
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,17">
+                        <Border Style="{StaticResource IconBox}">
+                            <Path Style="{StaticResource PanelIcon}" Data="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6ZM8 12l3 3 5-6"/>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Игры через VPN" Style="{StaticResource PanelTitle}"/>
+                            <TextBlock Text="Только тем, кому VPN нужен" Style="{StaticResource PanelSub}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,12"
+                               Text="Например, VRChat (без VPN не грузятся аватары) или Roblox. Выбери .exe игры или всю её папку — тогда через VPN пойдёт и лаунчер. Дота, CS и другие игры без блокировок сюда добавлять не нужно."/>
+                    <StackPanel x:Name="GameList"/>
+                    <TextBlock x:Name="EmptyText" Text="Пока ни одной игры" FontSize="12" Foreground="{StaticResource FaintBrush}" Margin="0,4,0,4"/>
+                    <WrapPanel Margin="0,12,0,0">
+                        <Button Style="{StaticResource PillButton}" Content="Добавить игру (.exe)" Margin="0,0,9,8" Click="AddExe_Click"/>
+                        <Button Style="{StaticResource SecondaryButton}" Content="Добавить папку игры" Margin="0,0,9,8" Click="AddFolder_Click"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="VpnWarning" Style="{StaticResource Hint}" Foreground="{StaticResource AmberTextBrush}" Visibility="Collapsed"
+                               Text="Для игр через VPN нужен ключ Amnezia или подписка — вставь их в «Настройках»."/>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

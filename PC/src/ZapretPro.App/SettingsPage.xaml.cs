@@ -442,7 +442,7 @@ public partial class SettingsPage : UserControl
     {
         ReconnectButton.IsEnabled = false;
         VpnText.Text = "Проверяю…";
-        await _engine.CheckNowAsync();
+        await _engine.CheckNowAsync(manual: true);
         Refresh();
     }
 

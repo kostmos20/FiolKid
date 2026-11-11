@@ -24,19 +24,33 @@ public static class SingBoxConfig
         for (var i = 0; i < servers.Count; i++)
         {
             var outbound = servers[i].Outbound.DeepClone().AsObject();
-            outbound["tag"] = $"s{i}";
+            // Номер делает имя уникальным, имя сервера видно в журнале при закреплении на время игры
+            var tag = $"{i + 1}. {servers[i].Name}";
+            outbound["tag"] = tag;
             outbounds.Add(outbound);
-            tags.Add($"s{i}");
+            tags.Add(tag);
         }
         outbounds.Insert(0, new JsonObject
         {
             ["type"] = "urltest",
-            ["tag"] = "auto",
+            ["tag"] = SingBoxApi.AutoTag,
             ["outbounds"] = tags,
             ["url"] = "https://www.gstatic.com/generate_204",
             ["interval"] = "3m",
             // Переходить на другой сервер, только если он быстрее на заметную величину
             ["tolerance"] = 80,
+        });
+        // Переключатель: обычно автовыбор, а на время игры — один закреплённый сервер (см. SingBoxApi)
+        var choices = new JsonArray(SingBoxApi.AutoTag);
+        foreach (var tag in tags)
+            choices.Add(tag!.GetValue<string>());
+        outbounds.Insert(0, new JsonObject
+        {
+            ["type"] = "selector",
+            ["tag"] = SingBoxApi.SelectorTag,
+            ["outbounds"] = choices,
+            ["default"] = SingBoxApi.AutoTag,
+            ["interrupt_exist_connections"] = false,
         });
         outbounds.Add(new JsonObject { ["type"] = "direct", ["tag"] = "direct" });
 
@@ -59,7 +73,7 @@ public static class SingBoxConfig
             ["outbounds"] = outbounds,
             ["route"] = new JsonObject
             {
-                ["final"] = "auto",
+                ["final"] = SingBoxApi.SelectorTag,
                 // Соединения к серверам подписки — мимо туннеля, через обычный интернет (иначе петля)
                 ["auto_detect_interface"] = true,
                 ["default_domain_resolver"] = "local",

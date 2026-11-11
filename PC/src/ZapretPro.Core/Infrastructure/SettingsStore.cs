@@ -45,6 +45,12 @@ public sealed class AppSettings
     /// <summary>Последний замер серверов подписки (без адресов и паролей).</summary>
     public DateTimeOffset? ServerBenchmarkAt { get; set; }
     public List<Vpn.ServerScore>? ServerBenchmark { get; set; }
+
+    /// <summary>Игровой режим: пока идёт любая игра, ничего не переключать. По умолчанию выключен.</summary>
+    public bool GameMode { get; set; }
+
+    /// <summary>Игры, которые идут через VPN (экран «Игры»).</summary>
+    public List<Games.GameEntry>? Games { get; set; }
 }
 
 public static class StrategyModes

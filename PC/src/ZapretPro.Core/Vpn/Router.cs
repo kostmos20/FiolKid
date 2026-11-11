@@ -14,6 +14,8 @@ public enum RouteSet
     Telegram,
     YouTube,
     Discord,
+    /// <summary>Домены игр из списка «Игры через VPN» — только пока игра запущена.</summary>
+    Games,
 }
 
 /// <summary>Списки доменов и подсетей из папки vpn (рядом с exe). Редактируются без пересборки.</summary>

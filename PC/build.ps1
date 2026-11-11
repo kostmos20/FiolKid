@@ -42,6 +42,15 @@ Copy-Item -Recurse (Join-Path $third 'zapret\bin') $zapret
 foreach ($list in 'ipset-all.txt', 'ipset-exclude.txt', 'list-exclude.txt', 'list-general.txt', 'list-google.txt') {
     Copy-Item (Join-Path $third "zapret\lists\$list") (Join-Path $zapret 'lists')
 }
+# Наши дополнения к исключениям zapret (например, steamserver.net — связь клиента Steam)
+$exclude = Join-Path $zapret 'lists\list-exclude.txt'
+$have = @(Get-Content $exclude -Encoding UTF8 | ForEach-Object { $_.Trim() })
+$extra = @(Get-Content (Join-Path $root 'data\list-exclude-extra.txt') -Encoding UTF8 |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ -and $have -notcontains $_ })
+if ($extra.Count -gt 0) {
+    $text = (Get-Content $exclude -Raw -Encoding UTF8).TrimEnd() + "`n" + ($extra -join "`n") + "`n"
+    [IO.File]::WriteAllText($exclude, $text, (New-Object Text.UTF8Encoding $false))
+}
 Copy-Item (Join-Path $root 'data\strategies.json') $zapret
 
 # Прокси для Telegram

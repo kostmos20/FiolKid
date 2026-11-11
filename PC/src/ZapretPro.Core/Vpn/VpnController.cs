@@ -51,7 +51,7 @@ public interface IVpn
 /// сразу, адреса сайтов из списков (с любыми поддоменами) — в момент, когда их спросит браузер (<see cref="SmartDns"/>).
 /// Если вставлено несколько способов — работает тот, что подключается и быстрее; упал — переходим на другой.
 /// </summary>
-public sealed class VpnController : IVpn
+public sealed class VpnController : IVpn, Games.IGameRoutes
 {
     // Сколько ждать первого ответа сервера сразу после запуска туннеля, и сколько после запуска
     // считать молчание сервера нормальным «подключаюсь», а не «сервер не отвечает»
@@ -99,6 +99,14 @@ public sealed class VpnController : IVpn
     private HashSet<RouteSet>? _matcherFor;
     private DateTimeOffset _dnsRetryAt;
 
+    // Игровой режим: держимся за выбранный сервер; переключиться можно один раз за игру
+    private bool _holdSwitched;
+    private bool _pinned;
+
+    // Игры через VPN: адреса, куда ходят их процессы, и домены, которые программа за ними запомнила
+    private readonly HashSet<IPAddress> _gameIps = [];
+    private IReadOnlyList<string> _gameDomains = [];
+
     public VpnController(IReadOnlyList<IVpnProfile> profiles, Func<Router> routerFactory, IRouteTable routes, IDnsHijack? dns,
         SettingsStore? settings = null, TimeProvider? time = null, TimeSpan? handshakeWait = null,
         Func<IReadOnlyList<string>>? otherVpns = null, Func<CancellationToken, Task<TimeSpan?>>? measure = null)
@@ -127,12 +135,24 @@ public sealed class VpnController : IVpn
 
     public VpnStatus Status { get; private set; } = VpnStatus.Initial;
 
+    /// <summary>
+    /// Идёт игра в игровом режиме: не сравнивать способы, не переподключаться из-за нового конфига,
+    /// держаться за сервер, а если он умер — переключиться один раз.
+    /// </summary>
+    public Func<bool> Hold { get; set; } = () => false;
+
+    /// <summary>Сообщение для человека: «сервер умер, перешёл на запасной» — показать уведомлением.</summary>
+    public event Action<string>? Notice;
+
     public event Action<string>? Log;
 
     public async Task<VpnStatus> ApplyAsync(IReadOnlySet<RouteSet> fallback, CancellationToken ct)
     {
         var sets = new HashSet<RouteSet>(fallback) { RouteSet.Ai, RouteSet.Blocked };
         var configured = _profiles.Where(p => p.Configured).ToList();
+        var hold = Hold();
+        if (!hold)
+            _holdSwitched = false;
 
         if (configured.Count == 0)
         {
@@ -148,7 +168,8 @@ public sealed class VpnController : IVpn
         }
 
         // Вставлено несколько способов — при первом запуске и раз в сутки выбираем быстрый
-        if (configured.Count > 1 && (_lastCompare is null || _time.GetUtcNow() - _lastCompare >= CompareInterval))
+        // Во время игры не сравниваем: сравнение по очереди поднимает каждый способ
+        if (configured.Count > 1 && !hold && (_lastCompare is null || _time.GetUtcNow() - _lastCompare >= CompareInterval))
             await CompareAsync(configured, sets, fallback, ct);
 
         VpnStatus? last = null;
@@ -157,7 +178,27 @@ public sealed class VpnController : IVpn
             var (status, ok) = await TryProfileAsync(profile, sets, fallback, ct);
             last = status;
             if (ok)
+            {
+                await SyncPinAsync(ct);
                 return Status = status;
+            }
+
+            if (hold && profile == _active)
+            {
+                // Сервер умер посреди игры: один раз — на запасной сервер той же подписки, без переподключения
+                if (!_holdSwitched && profile.Tunnel is IServerPin pin && await pin.SwitchToSpareAsync(ct) is { } spare)
+                {
+                    _holdSwitched = true;
+                    Notice?.Invoke($"VPN-сервер перестал отвечать — перешёл на запасной: {spare}");
+                    Log?.Invoke($"Игровой режим: сервер не отвечает, перешёл на запасной «{spare}»");
+                    return Status = status with { State = VpnState.Connecting };
+                }
+                if (_holdSwitched)
+                    return Status = status; // уже переключались за эту игру — больше не дёргаем
+                _holdSwitched = true;
+                if (configured.Count > 1)
+                    Notice?.Invoke($"VPN через {profile.Name} перестал отвечать — переключаюсь на другой способ");
+            }
 
             if (configured.Count > 1)
             {
@@ -194,7 +235,9 @@ public sealed class VpnController : IVpn
             _active = profile;
         }
 
-        var health = plan.Conf == _runningConf ? await profile.Tunnel.GetHealthAsync(ct) : TunnelHealth.Stopped;
+        // Во время игры новый конфиг (обновилась подписка) подождёт: переподключение выкинуло бы из игры
+        var keep = plan.Conf == _runningConf || Hold() && _runningConf is not null && profile == _active;
+        var health = keep ? await profile.Tunnel.GetHealthAsync(ct) : TunnelHealth.Stopped;
         var justStarted = false;
         if (health == TunnelHealth.Stopped)
         {
@@ -206,6 +249,7 @@ public sealed class VpnController : IVpn
                 return (new VpnStatus(VpnState.Failed, 0, fallback, Explain(profile.Tunnel.LastError)) { Profile = profile.Name }, false);
             _runningConf = plan.Conf;
             _startedAt = _time.GetUtcNow();
+            _pinned = false;
             justStarted = true;
         }
 
@@ -304,6 +348,99 @@ public sealed class VpnController : IVpn
     }
 
     /// <summary>
+    /// Игровой режим включился — закрепить сервер, который сейчас самый быстрый; закончился — снова автовыбор.
+    /// Зовётся при каждой проверке и сразу при начале и конце игры.
+    /// </summary>
+    public async Task SyncPinAsync(CancellationToken ct)
+    {
+        if (_active?.Tunnel is not IServerPin pin || _runningConf is null)
+            return;
+        var hold = Hold();
+        if (hold && !_pinned)
+        {
+            if (await pin.PinAsync(ct) is { } name)
+            {
+                _pinned = true;
+                Log?.Invoke($"Игровой режим: держусь за сервер «{name}»");
+            }
+        }
+        else if (!hold && _pinned)
+        {
+            await pin.UnpinAsync(ct);
+            _pinned = false;
+            Log?.Invoke("Игровой режим закончился: сервер снова выбирается автоматически");
+        }
+    }
+
+    /// <summary>
+    /// Что игр из списка сейчас нужно вести через VPN: запомненные адреса и домены. Пусто — игр нет.
+    /// Новые адреса добавляются по ходу через <see cref="AddGameAddress"/>.
+    /// </summary>
+    public void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains)
+    {
+        lock (_lock)
+        {
+            _gameIps.Clear();
+            foreach (var ip in addresses.Where(Routable))
+                _gameIps.Add(ip);
+            _gameDomains = domains;
+            _matcherFor = null; // перестроить классификатор доменов при следующей проверке
+            if (_runningConf is not null)
+            {
+                foreach (var ip in _gameIps)
+                    _routes.Add(new IPNetwork(ip, 32));
+            }
+        }
+        RebuildClassifier();
+    }
+
+    /// <summary>
+    /// Процесс игры подключился к новому адресу: сразу маршрут в туннель. True — маршрут новый
+    /// (значит, прежнее соединение шло мимо VPN и его стоит порвать).
+    /// </summary>
+    public bool AddGameAddress(IPAddress ip)
+    {
+        if (!Routable(ip))
+            return false;
+        lock (_lock)
+        {
+            if (!_gameIps.Add(ip) || _runningConf is null)
+                return false;
+            return _routes.Add(new IPNetwork(ip, 32));
+        }
+    }
+
+    public string? NameOf(IPAddress address) => _dns?.NameOf(address);
+
+    /// <summary>Туннель поднят — маршруты игр есть куда ставить.</summary>
+    public bool TunnelRunning => _runningConf is not null;
+
+    private bool Routable(IPAddress ip) =>
+        ip.AddressFamily == AddressFamily.InterNetwork && !_endpoints.Contains(ip) && !Router.NeverRoute.Any(n => n.Contains(ip))
+        && !IPAddress.IsLoopback(ip);
+
+    /// <summary>Домены игр поменялись — наш DNS сразу начинает вести их в туннель.</summary>
+    private void RebuildClassifier()
+    {
+        if (_dns is not { Active: true } || _router is null || _activeSets.Count == 0)
+            return;
+        var sets = new HashSet<RouteSet>(_activeSets);
+        _dns.UpdateClassifier(BuildClassifier(sets));
+        _matcherFor = sets;
+    }
+
+    private Func<string, RouteSet?> BuildClassifier(HashSet<RouteSet> sets)
+    {
+        var lists = _router!.Lists;
+        var pairs = MatchOrder.Where(sets.Contains).SelectMany(s => lists.Domains[s].Select(d => (d, s)));
+        IReadOnlyList<string> games;
+        lock (_lock)
+            games = _gameDomains;
+        var matcher = new DomainMatcher(pairs.Concat(games.Select(d => (d, RouteSet.Games))));
+        return matcher.Match;
+    }
+
+    /// <summary>
     /// Наш DNS узнал адреса сайта, который идёт через VPN: сразу ведём их в туннель — до того,
     /// как браузер получит ответ и начнёт подключаться.
     /// </summary>
@@ -317,6 +454,13 @@ public sealed class VpnController : IVpn
             {
                 if (ip.AddressFamily != AddressFamily.InterNetwork || _endpoints.Contains(ip) || Router.NeverRoute.Any(n => n.Contains(ip)))
                     continue;
+                if (set == RouteSet.Games)
+                {
+                    // Домен игры: держим, пока игра идёт (снимется вместе с остальными адресами игры)
+                    if (_gameIps.Add(ip))
+                        add.Add(ip);
+                    continue;
+                }
                 _learned[ip] = (set, now);
                 if (_activeSets.Contains(set))
                     add.Add(ip);
@@ -349,6 +493,11 @@ public sealed class VpnController : IVpn
                 if (_activeSets.Contains(set) && !_endpoints.Contains(ip) && !wanted.Any(n => n.Contains(ip)))
                     wanted.Add(new IPNetwork(ip, 32));
             }
+            foreach (var ip in _gameIps)
+            {
+                if (!_endpoints.Contains(ip))
+                    wanted.Add(new IPNetwork(ip, 32));
+            }
             _routes.Sync(wanted);
         }
     }
@@ -360,9 +509,7 @@ public sealed class VpnController : IVpn
 
         if (_matcherFor is null || !_matcherFor.SetEquals(sets) || !_dns.Active)
         {
-            var lists = _router.Lists;
-            var matcher = new DomainMatcher(MatchOrder.Where(sets.Contains).SelectMany(s => lists.Domains[s].Select(d => (d, s))));
-            Func<string, RouteSet?> classify = matcher.Match;
+            Func<string, RouteSet?> classify = BuildClassifier(sets);
             _matcherFor = sets;
 
             if (_dns.Active)
@@ -374,7 +521,7 @@ public sealed class VpnController : IVpn
                 return;
 
             if (await _dns.StartAsync(classify, OnResolvedAsync, () => _runningConf is not null))
-                Log?.Invoke($"Свой DNS включён: сайты из списков ({matcher.Count} доменов) и все их поддомены идут через VPN");
+                Log?.Invoke("Свой DNS включён: сайты из списков и все их поддомены идут через VPN");
             else
             {
                 _dnsRetryAt = _time.GetUtcNow() + DnsRetry;

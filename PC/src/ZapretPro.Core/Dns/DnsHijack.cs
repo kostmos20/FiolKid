@@ -28,6 +28,9 @@ public interface IDnsHijack
     /// <summary>VPN сейчас выключится (переподключение): снять блокировку DNS, пока адаптер не исчез.</summary>
     void TunnelStopping();
 
+    /// <summary>Имя, по которому недавно спрашивали этот адрес, — чтобы запомнить домены игр.</summary>
+    string? NameOf(IPAddress address);
+
     /// <summary>
     /// Свой DNS выключен, а DNS Windows вернуть до конца не вышло — попробовать ещё раз. Зовётся по таймеру
     /// и при смене сети. Пока свой DNS работает — подхватить DNS новой сети.
@@ -299,6 +302,8 @@ public sealed class DnsHijack : IDnsHijack
     }
 
     public IReadOnlyList<string> Recent => _dns?.Recent ?? [];
+
+    public string? NameOf(IPAddress address) => _dns?.NameOf(address);
 
     public bool Unstable => _dns?.Unstable ?? false;
 

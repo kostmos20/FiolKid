@@ -211,7 +211,7 @@
                         <StackPanel x:Name="FooterQuiet" Orientation="Horizontal" HorizontalAlignment="Center">
                             <Path Data="m5 12 4 4L19 6" Stroke="#FFA3B4AA" StrokeThickness="1.5" Width="13" Height="13" Stretch="Uniform"
                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" VerticalAlignment="Center"/>
-                            <TextBlock Text="Привычные сайты работают как обычно" FontSize="11" Foreground="#FFB6B8C2" Margin="6,0,0,0"/>
+                            <TextBlock x:Name="FooterText" Text="Привычные сайты работают как обычно" FontSize="11" Foreground="#FFB6B8C2" Margin="6,0,0,0"/>
                         </StackPanel>
                         <Button x:Name="UpdateButton" Visibility="Collapsed" HorizontalAlignment="Center" Cursor="Hand" Click="Update_Click">
                             <Button.Template>
@@ -225,6 +225,7 @@
                 </StackPanel>
             </Canvas>
 
+            <local:GamesPage x:Name="GamesTab" Margin="0,36,0,17" Visibility="Collapsed"/>
             <local:LogPage x:Name="LogTab" Margin="0,36,0,17" Visibility="Collapsed"/>
             <local:SettingsPage x:Name="SettingsTab" Margin="0,36,0,17" Visibility="Collapsed"/>
         </Grid>
@@ -247,7 +248,7 @@
                         <DropShadowEffect ShadowDepth="4" Direction="270" BlurRadius="4" Opacity="0.3" Color="#FF020811"/>
                     </Image.Effect>
                 </Image>
-                <UniformGrid x:Name="TabBar" Columns="3" VerticalAlignment="Center">
+                <UniformGrid x:Name="TabBar" Columns="4" VerticalAlignment="Center">
                     <Button x:Name="HomeTabButton" Style="{StaticResource TabButton}" Click="HomeTab_Click">
                         <Grid>
                             <StackPanel>
@@ -258,6 +259,19 @@
                             </StackPanel>
                             <Border x:Name="HomeMark" Width="15" Height="2" CornerRadius="1" Background="#FFCDA76C"
                                     VerticalAlignment="Bottom" Margin="0,0,0,-7"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="GamesTabButton" Style="{StaticResource TabButton}" Click="GamesTab_Click">
+                        <Grid>
+                            <StackPanel>
+                                <Path Style="{StaticResource NavIcon}"
+                                      Data="M7 9h4M9 7v4M15 10h.01M18 8h.01M6.5 5h11A4.5 4.5 0 0 1 22 9.5v3.2a3.3 3.3 0 0 1-6 1.9L15 13H9l-1 1.6a3.3 3.3 0 0 1-6-1.9V9.5A4.5 4.5 0 0 1 6.5 5Z"
+                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                                <TextBlock Text="Игры" FontSize="10.5" Margin="0,7,0,0" HorizontalAlignment="Center"
+                                           Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+                            </StackPanel>
+                            <Border x:Name="GamesMark" Width="15" Height="2" CornerRadius="1" Background="#FFCDA76C"
+                                    VerticalAlignment="Bottom" Margin="0,0,0,-7" Visibility="Hidden"/>
                         </Grid>
                     </Button>
                     <Button x:Name="LogTabButton" Style="{StaticResource TabButton}" Click="LogTab_Click">

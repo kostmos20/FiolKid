@@ -9,7 +9,7 @@ namespace ZapretPro.Core.Vpn;
 /// поэтому завершается вместе с программой. Адаптер называется так же, как у AmneziaWG («FiolKid»):
 /// одновременно работает только один туннель, и маршрутами управляет тот же <see cref="TunnelRoutes"/>.
 /// </summary>
-public sealed class SingBoxTunnel : IVpnTunnel
+public sealed class SingBoxTunnel : IVpnTunnel, IServerPin
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(15);
 
@@ -18,6 +18,8 @@ public sealed class SingBoxTunnel : IVpnTunnel
     private readonly Func<CancellationToken, Task<TimeSpan?>> _probe;
     private readonly OutputTail _output = new();
     private Process? _process;
+    private (int Port, string Secret)? _api;
+    private readonly SingBoxApi _control;
 
     public SingBoxTunnel() : this(Path.Combine(AppPaths.InstallDir, "sing-box"), ProtectedFolder.Root)
     {
@@ -28,7 +30,12 @@ public sealed class SingBoxTunnel : IVpnTunnel
         _dir = dir;
         _confPath = Path.Combine(confDir, "sing-box.json");
         _probe = probe ?? TunnelProbe.MeasureAsync;
+        _control = new SingBoxApi(() => _process is { HasExited: false } ? _api : null);
     }
+
+    public Task<string?> PinAsync(CancellationToken ct) => _control.PinAsync(ct);
+    public Task UnpinAsync(CancellationToken ct) => _control.UnpinAsync(ct);
+    public Task<string?> SwitchToSpareAsync(CancellationToken ct) => _control.SwitchToSpareAsync(ct);
 
     public string? LastError { get; private set; }
 
@@ -45,7 +52,10 @@ public sealed class SingBoxTunnel : IVpnTunnel
         }
 
         KillOurStrayCopies();
-        ProtectedFolder.Write(Path.GetDirectoryName(_confPath)!, _confPath, conf);
+        // Доступ к API sing-box (закрепить сервер на время игры): свободный порт и новый пароль на каждый запуск
+        var (withApi, port, secret) = SingBoxApi.WithApi(conf);
+        _api = (port, secret);
+        ProtectedFolder.Write(Path.GetDirectoryName(_confPath)!, _confPath, withApi);
         _output.Clear();
 
         var process = new Process

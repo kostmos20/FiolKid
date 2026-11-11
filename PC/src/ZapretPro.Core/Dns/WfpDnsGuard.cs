@@ -35,18 +35,18 @@ public sealed class WfpDnsGuard : IDnsLeakGuard
         new("7a0f3c1e-52b4-4f1d-9c6e-0d3f8a6b2e47"), // v6: остальным нельзя
     ];
 
-    private static readonly Guid LayerConnectV4 = new("c38d57d1-05a7-4c33-904f-7fbceee60e82");
-    private static readonly Guid LayerConnectV6 = new("4a72393b-319f-44bc-84c3-ba54dcb3b6b4");
-    private static readonly Guid ConditionRemotePort = new("c35a604d-d22b-4e1a-91b4-68f674ee674b");
-    private static readonly Guid ConditionAppId = new("d78e1e87-8644-4ea5-9437-d809ecefc971");
-    private static readonly Guid ConditionFlags = new("632ce23b-5167-435c-86d7-e903684aa80c");
+    internal static readonly Guid LayerConnectV4 = new("c38d57d1-05a7-4c33-904f-7fbceee60e82");
+    internal static readonly Guid LayerConnectV6 = new("4a72393b-319f-44bc-84c3-ba54dcb3b6b4");
+    internal static readonly Guid ConditionRemotePort = new("c35a604d-d22b-4e1a-91b4-68f674ee674b");
+    internal static readonly Guid ConditionAppId = new("d78e1e87-8644-4ea5-9437-d809ecefc971");
+    internal static readonly Guid ConditionFlags = new("632ce23b-5167-435c-86d7-e903684aa80c");
 
-    private const uint FwpUint8 = 1, FwpUint16 = 2, FwpUint32 = 3, FwpByteBlob = 12;
-    private const uint MatchEqual = 0, MatchFlagsAllSet = 6;
-    private const uint ConditionFlagIsLoopback = 0x1;
-    private const uint ActionBlock = 0x1001, ActionPermit = 0x1002;
-    private const uint SessionFlagDynamic = 0x1;
-    private const uint RpcAuthnWinNt = 10;
+    internal const uint FwpUint8 = 1, FwpUint16 = 2, FwpUint32 = 3, FwpByteBlob = 12;
+    internal const uint MatchEqual = 0, MatchFlagsAllSet = 6;
+    internal const uint ConditionFlagIsLoopback = 0x1;
+    internal const uint ActionBlock = 0x1001, ActionPermit = 0x1002;
+    internal const uint SessionFlagDynamic = 0x1;
+    internal const uint RpcAuthnWinNt = 10;
 
     private readonly object _lock = new();
     private IntPtr _engine;
@@ -237,14 +237,14 @@ public sealed class WfpDnsGuard : IDnsLeakGuard
         return FwpmFilterAdd0(engine, ref filter, IntPtr.Zero, out _);
     }
 
-    private static FWPM_FILTER_CONDITION0 Condition(Guid field, uint match, uint type, IntPtr value) => new()
+    internal static FWPM_FILTER_CONDITION0 Condition(Guid field, uint match, uint type, IntPtr value) => new()
     {
         fieldKey = field,
         matchType = match,
         conditionValue = new FWP_VALUE0 { type = type, value = value },
     };
 
-    private static void FreeAll(List<IntPtr> strings, List<IntPtr> blocks, List<IntPtr> appIds)
+    internal static void FreeAll(List<IntPtr> strings, List<IntPtr> blocks, List<IntPtr> appIds)
     {
         foreach (var p in strings)
             Marshal.FreeHGlobal(p);
@@ -260,7 +260,7 @@ public sealed class WfpDnsGuard : IDnsLeakGuard
         appIds.Clear();
     }
 
-    private static string Describe(uint error) => error switch
+    internal static string Describe(uint error) => error switch
     {
         0x80320009 => "фильтр уже есть (FWP_E_ALREADY_EXISTS)",
         0x5 => "нет прав администратора",
@@ -351,36 +351,36 @@ public sealed class WfpDnsGuard : IDnsLeakGuard
     }
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmEngineOpen0(IntPtr serverName, uint authnService, IntPtr authIdentity, ref FWPM_SESSION0 session,
+    internal static extern uint FwpmEngineOpen0(IntPtr serverName, uint authnService, IntPtr authIdentity, ref FWPM_SESSION0 session,
         out IntPtr engineHandle);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmEngineClose0(IntPtr engineHandle);
+    internal static extern uint FwpmEngineClose0(IntPtr engineHandle);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmTransactionBegin0(IntPtr engineHandle, uint flags);
+    internal static extern uint FwpmTransactionBegin0(IntPtr engineHandle, uint flags);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmTransactionCommit0(IntPtr engineHandle);
+    internal static extern uint FwpmTransactionCommit0(IntPtr engineHandle);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmTransactionAbort0(IntPtr engineHandle);
+    internal static extern uint FwpmTransactionAbort0(IntPtr engineHandle);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmSubLayerAdd0(IntPtr engineHandle, ref FWPM_SUBLAYER0 subLayer, IntPtr sd);
+    internal static extern uint FwpmSubLayerAdd0(IntPtr engineHandle, ref FWPM_SUBLAYER0 subLayer, IntPtr sd);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmSubLayerDeleteByKey0(IntPtr engineHandle, ref Guid key);
+    internal static extern uint FwpmSubLayerDeleteByKey0(IntPtr engineHandle, ref Guid key);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmFilterAdd0(IntPtr engineHandle, ref FWPM_FILTER0 filter, IntPtr sd, out ulong id);
+    internal static extern uint FwpmFilterAdd0(IntPtr engineHandle, ref FWPM_FILTER0 filter, IntPtr sd, out ulong id);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern uint FwpmFilterDeleteByKey0(IntPtr engineHandle, ref Guid key);
+    internal static extern uint FwpmFilterDeleteByKey0(IntPtr engineHandle, ref Guid key);
 
     [DllImport("fwpuclnt.dll", CharSet = CharSet.Unicode)]
-    private static extern uint FwpmGetAppIdFromFileName0(string fileName, out IntPtr appId);
+    internal static extern uint FwpmGetAppIdFromFileName0(string fileName, out IntPtr appId);
 
     [DllImport("fwpuclnt.dll")]
-    private static extern void FwpmFreeMemory0(ref IntPtr p);
+    internal static extern void FwpmFreeMemory0(ref IntPtr p);
 }

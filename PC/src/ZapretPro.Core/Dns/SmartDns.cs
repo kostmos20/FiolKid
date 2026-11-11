@@ -58,6 +58,37 @@ public sealed class SmartDns : IAsyncDisposable
     private static List<IPEndPoint> WithoutSelf(IReadOnlyList<IPEndPoint> upstreams, int port) =>
         upstreams.Where(e => !(IPAddress.IsLoopback(e.Address) && e.Port == port)).ToList();
 
+    // Какое имя последним дало этот адрес: игра подключилась к адресу — узнаём, что это за сервер
+    private const int MaxNames = 4000;
+    private readonly Dictionary<IPAddress, string> _names = [];
+
+    private void Remember(string name, byte[] answer)
+    {
+        IReadOnlyList<IPAddress> addresses;
+        try
+        {
+            addresses = DnsMessage.ReadARecords(answer);
+        }
+        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+            return;
+        }
+        lock (_names)
+        {
+            if (_names.Count > MaxNames)
+                _names.Clear();
+            foreach (var ip in addresses)
+                _names[ip] = name;
+        }
+    }
+
+    /// <summary>Имя, по которому недавно спрашивали этот адрес, или null.</summary>
+    public string? NameOf(IPAddress address)
+    {
+        lock (_names)
+            return _names.GetValueOrDefault(address);
+    }
+
     /// <summary>Сменилась сеть — обычные вопросы теперь пересылать DNS новой сети.</summary>
     public void UpdateUpstreams(IReadOnlyList<IPEndPoint> normalUpstreams)
     {
@@ -140,7 +171,13 @@ public sealed class SmartDns : IAsyncDisposable
 
         var set = TunnelUp() ? Classify(name) : null;
         if (set is null)
-            return await ForwardAsync(query, _normalUpstreams, ct) ?? DnsMessage.ServerFailure(query);
+        {
+            var plain = await ForwardAsync(query, _normalUpstreams, ct);
+            if (plain is null)
+                return DnsMessage.ServerFailure(query);
+            Remember(name, plain);
+            return plain;
+        }
 
         // Только IPv4 через туннель: IPv6 и HTTPS-записи (в них подсказки адресов IPv6) — пусто
         if (type is DnsMessage.TypeAaaa or DnsMessage.TypeHttps)
@@ -171,6 +208,7 @@ public sealed class SmartDns : IAsyncDisposable
         }
 
         var addresses = DnsMessage.ReadARecords(answer);
+        Remember(name, answer);
         Remember($"{name} → {(addresses.Count == 0 ? "нет адресов" : string.Join(",", addresses))} ({set}){source}");
         if (addresses.Count > 0)
         {

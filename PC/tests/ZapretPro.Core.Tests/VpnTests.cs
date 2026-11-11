@@ -412,6 +412,8 @@ public sealed class VpnTests : IDisposable
 
         public void TunnelStopping() => TunnelStops++;
 
+        public string? NameOf(IPAddress address) => null;
+
         public Task StopAsync()
         {
             Active = false;
@@ -537,6 +539,59 @@ public sealed class VpnTests : IDisposable
         await vpn.ApplyAsync(NoFallback, default);
         Assert.Single(tunnel.Started);
         Assert.Equal(1, dns.Starts);
+    }
+
+    [Fact]
+    public async Task During_game_mode_new_config_waits_and_tunnel_is_not_restarted()
+    {
+        var (vpn, tunnel, keys, _) = Controller();
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Single(tunnel.Started);
+
+        // Ключ сменился (например, знакомый выдал новый сервер) посреди игры
+        var hold = true;
+        vpn.Hold = () => hold;
+        var changed = SyntheticKey.Config("amnezia-awg", "amnezia-awg").ToJsonString().Replace("203.0.113.10", "203.0.113.77");
+        keys.Save(SyntheticKey.Build((System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(changed)!));
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Single(tunnel.Started);
+
+        // Игра закончилась — переподключаемся с новым конфигом
+        hold = false;
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Equal(2, tunnel.Started.Count);
+        Assert.Contains("203.0.113.77", tunnel.Started[1]);
+    }
+
+    [Fact]
+    public async Task Game_addresses_and_domains_go_through_vpn_only_while_the_game_runs()
+    {
+        var (vpn, _, keys, _) = Controller(out var routes, out var dns);
+        keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
+        await vpn.ApplyAsync(NoFallback, default);
+
+        vpn.SetGameTargets([IPAddress.Parse("45.1.2.3")], ["vrchat.cloud"]);
+        Assert.Contains("45.1.2.3/32", routes.Installed);
+        Assert.Equal(RouteSet.Games, dns.Classify("api.vrchat.cloud"));
+
+        // Новый адрес игры — маршрут сразу; повторно — уже есть
+        Assert.True(vpn.AddGameAddress(IPAddress.Parse("45.9.9.9")));
+        Assert.False(vpn.AddGameAddress(IPAddress.Parse("45.9.9.9")));
+        Assert.False(vpn.AddGameAddress(IPAddress.Parse("192.168.1.20"))); // локальная сеть — никогда
+        await dns.OnResolved([IPAddress.Parse("45.7.7.7")], RouteSet.Games);
+        Assert.Contains("45.7.7.7/32", routes.Installed);
+
+        // Плановая сверка маршрутов их не убирает
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.Contains("45.9.9.9/32", routes.Installed);
+
+        // Игра закрылась
+        vpn.SetGameTargets([], []);
+        await vpn.ApplyAsync(NoFallback, default);
+        Assert.DoesNotContain("45.1.2.3/32", routes.Installed);
+        Assert.DoesNotContain("45.9.9.9/32", routes.Installed);
+        Assert.Null(dns.Classify("api.vrchat.cloud"));
     }
 
     [Fact]

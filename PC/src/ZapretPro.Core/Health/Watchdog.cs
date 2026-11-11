@@ -43,6 +43,11 @@ public sealed record WatchdogOptions
     /// <summary>Пауза после смены стратегии, прежде чем проверять.</summary>
     public TimeSpan WarmUp { get; init; } = TimeSpan.FromSeconds(1.5);
     public int FailuresBeforeSwitch { get; init; } = 2;
+    /// <summary>
+    /// Не чаще этого — новый перебор стратегий. При массовых блокировках иначе программа металась бы
+    /// без конца: перезапуски zapret и замеры скорости выкидывают из игр и забивают канал.
+    /// </summary>
+    public TimeSpan MinSwitchInterval { get; init; } = TimeSpan.FromMinutes(15);
     /// <summary>Как часто пробовать вернуться с запасного канала (чтобы не гонять видео через сервер знакомого).</summary>
     public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(1);
     /// <summary>Через сколько замер скорости альтов считается устаревшим.</summary>
@@ -68,6 +73,7 @@ public sealed class Watchdog
     private readonly IVpn _vpn;
     private readonly IHealthProbe _probe;
     private readonly IZapretSpeedProbe? _speed;
+    private readonly IActivityMonitor? _activity;
     private readonly SettingsStore _settings;
     private readonly WatchdogOptions _options;
     private readonly TimeProvider _time;
@@ -82,6 +88,9 @@ public sealed class Watchdog
     private string? _lastError;
     private bool _needsReboot;
     private bool _measuring;
+    /// <summary>Перебор нужен, но отложен (рано или компьютер занят): сломавшееся пока через запасной канал.</summary>
+    private bool _deferred;
+    private string? _lastDeferReason;
 
     // Запасной режим: какие сервисы zapret сейчас отдал VPN, и с какого момента Telegram идёт через VPN
     private readonly HashSet<Service> _zapretFallback = [];
@@ -90,8 +99,10 @@ public sealed class Watchdog
     private VpnStatus _vpnStatus = VpnStatus.Initial;
 
     public Watchdog(IZapretRunner zapret, ITelegramProxy telegram, IVpn vpn, IHealthProbe probe, SettingsStore settings,
-        WatchdogOptions? options = null, TimeProvider? time = null, IZapretSpeedProbe? speed = null)
+        WatchdogOptions? options = null, TimeProvider? time = null, IZapretSpeedProbe? speed = null,
+        IActivityMonitor? activity = null)
     {
+        _activity = activity;
         _speed = speed;
         _zapret = zapret;
         _telegram = telegram;
@@ -187,8 +198,14 @@ public sealed class Watchdog
         }
         if (settings.EffectiveStrategyMode == StrategyModes.Fastest && _speed is not null && BenchmarkStale(settings))
         {
-            await BenchmarkCoreAsync(ct);
-            return;
+            // Замер качает тестовые файлы и перезапускает zapret раз двадцать — не во время игры
+            if (_activity?.BusyReason() is { } busy)
+                Write($"Замер скорости альтов отложен: {busy}");
+            else
+            {
+                await BenchmarkCoreAsync(ct);
+                return;
+            }
         }
 
         var saved = settings.LastStrategyId;
@@ -222,6 +239,7 @@ public sealed class Watchdog
         var strategies = _zapret.Strategies;
         _failures = 0;
         _lastSearch = _time.GetUtcNow();
+        _deferred = false;
         _measuring = true;
         SetState(ZapretState.Searching);
         StrategyScore? best;
@@ -360,8 +378,39 @@ public sealed class Watchdog
             await SearchAsync(_current + 1, ct);
     }
 
-    /// <summary>Одна плановая проверка. Можно вызвать и вне расписания («Проверить сейчас»).</summary>
-    public async Task CheckAsync(CancellationToken ct)
+    /// <summary>
+    /// Почему сейчас нельзя устраивать перебор, или null. Нельзя чаще <see cref="WatchdogOptions.MinSwitchInterval"/>
+    /// и пока компьютер занят (игра, полноэкранное приложение, большая загрузка).
+    /// </summary>
+    private string? SwitchBlocked()
+    {
+        var since = _time.GetUtcNow() - _lastSearch;
+        if (since < _options.MinSwitchInterval)
+            return $"с прошлого перебора прошло {since.TotalMinutes:0} мин, нужно не меньше {_options.MinSwitchInterval.TotalMinutes:0}";
+        return _activity?.BusyReason();
+    }
+
+    /// <summary>
+    /// Перебор отложен: сломавшиеся сервисы — через запасной канал, winws не трогаем. В журнал пишем, только
+    /// когда что-то меняется, — чтобы не засорять его каждые 2,5 минуты.
+    /// </summary>
+    private void Defer(string reason, IEnumerable<Service> toVpn)
+    {
+        _deferred = true;
+        _failures = 0;
+        var added = toVpn.Where(_zapretFallback.Add).ToList();
+        if (added.Count > 0 || reason != _lastDeferReason)
+            Write($"Альт не меняю: {reason}" +
+                  (added.Count > 0 ? $". Пока через запасной канал: {string.Join(", ", added)}" : ""));
+        _lastDeferReason = reason;
+        SetState(_zapret.IsRunning ? ZapretState.Partial : ZapretState.Failed);
+    }
+
+    /// <summary>
+    /// Одна плановая проверка. Можно вызвать и вне расписания: <paramref name="manual"/> — человек нажал
+    /// «Проверить сейчас», ему перебор разрешён без пауз и даже во время игры.
+    /// </summary>
+    public async Task CheckAsync(CancellationToken ct, bool manual = false)
     {
         await _gate.WaitAsync(ct);
         try
@@ -371,23 +420,43 @@ public sealed class Watchdog
 
             await EnsureTelegramAsync(ct);
 
+            // Отложенный перебор — как только станет можно; обычный запасной режим — раз в час
+            var retryAfter = _deferred ? _options.MinSwitchInterval : _options.RetryInterval;
             if (_state is ZapretState.Failed or ZapretState.Partial
-                && _time.GetUtcNow() - _lastSearch >= _options.RetryInterval)
+                && (manual && _deferred || _time.GetUtcNow() - _lastSearch >= retryAfter))
             {
-                Write("Прошёл час — пробую снова обойтись без запасного канала");
-                if (ManualIndex(_settings.Load()) is { } manual)
-                    await SearchAsync(manual, ct, only: true);
-                else
-                    await SearchAsync(_state == ZapretState.Failed ? 0 : _current + 1, ct);
-                return;
+                var blocked = manual ? null : _activity?.BusyReason();
+                if (blocked is null)
+                {
+                    var wasDeferred = _deferred;
+                    _deferred = false;
+                    _lastDeferReason = null;
+                    Write(wasDeferred ? "Подбираю альт — перебор был отложен" : "Прошёл час — пробую снова обойтись без запасного канала");
+                    if (ManualIndex(_settings.Load()) is { } manualIndex)
+                        await SearchAsync(manualIndex, ct, only: true);
+                    else if (wasDeferred)
+                        await RecoverStrategyAsync(ct);
+                    else
+                        await SearchAsync(_state == ZapretState.Failed ? 0 : _current + 1, ct);
+                    return;
+                }
+                if (blocked != _lastDeferReason)
+                    Write($"Перебор откладываю: {blocked}");
+                _lastDeferReason = blocked;
             }
 
-            if (_state != ZapretState.Failed && !_zapret.IsRunning)
+            if (_state != ZapretState.Failed && !_zapret.IsRunning && _current >= 0)
             {
                 Write("winws не работает — перезапускаю");
                 if (!await _zapret.StartAsync(_zapret.Strategies[_current], ct))
                 {
                     _lastError = _zapret.LastError;
+                    if (!manual && SwitchBlocked() is { } reason)
+                    {
+                        Defer(reason, ZapretServices);
+                        await ApplyVpnAsync(ct);
+                        return;
+                    }
                     await RecoverStrategyAsync(ct);
                     return;
                 }
@@ -422,10 +491,19 @@ public sealed class Watchdog
                     Write($"Проверка не прошла ({_failures} из {_options.FailuresBeforeSwitch})");
                     if (_failures >= _options.FailuresBeforeSwitch)
                     {
-                        await RecoverStrategyAsync(ct);
-                        return;
+                        if (!manual && SwitchBlocked() is { } reason)
+                        {
+                            // Не перебираем, а отдаём сломавшееся VPN: winws и остальное работают как работали
+                            Defer(reason, active.Where(s => !report[s]));
+                        }
+                        else
+                        {
+                            await RecoverStrategyAsync(ct);
+                            return;
+                        }
                     }
-                    Notify();
+                    else
+                        Notify();
                 }
             }
 
@@ -453,6 +531,8 @@ public sealed class Watchdog
         _zapretFallback.Clear();
         _telegramFallbackSince = null;
         _telegramFailures = 0;
+        _deferred = false;
+        _lastDeferReason = null;
         SetState(ZapretState.Stopped);
     }
 
@@ -467,6 +547,7 @@ public sealed class Watchdog
         var strategies = _zapret.Strategies;
         _failures = 0;
         _lastSearch = _time.GetUtcNow();
+        _deferred = false;
         SetState(ZapretState.Searching);
 
         // Пока ищем, YouTube и Discord должны идти мимо VPN — иначе проверка покажет успех туннеля, а не zapret

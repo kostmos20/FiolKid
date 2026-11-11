@@ -349,7 +349,7 @@ public partial class LogPage : UserControl
     private async void Check_Click(object sender, RoutedEventArgs e)
     {
         CheckButton.IsEnabled = false;
-        await _engine.CheckNowAsync();
+        await _engine.CheckNowAsync(manual: true);
         CheckButton.IsEnabled = true;
     }
 

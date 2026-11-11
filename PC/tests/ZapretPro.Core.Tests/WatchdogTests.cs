@@ -21,7 +21,7 @@ public sealed class WatchdogTests : IDisposable
         _probe = new FakeProbe(_zapret, _telegram, _vpn);
         _settings = new SettingsStore(Path.Combine(_dir, "settings.json"));
         _watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
-            new WatchdogOptions { WarmUp = TimeSpan.Zero }, _time);
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, MinSwitchInterval = TimeSpan.Zero }, _time);
     }
 
     public void Dispose()
@@ -98,7 +98,7 @@ public sealed class WatchdogTests : IDisposable
     {
         var speed = new FakeSpeed(_zapret) { ["general"] = (4, 9000), ["ALT"] = (2, 1000), ["ALT2"] = (4, 2500), ["ALT3"] = (4, 4000) };
         var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
-            new WatchdogOptions { WarmUp = TimeSpan.Zero }, _time, speed);
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, MinSwitchInterval = TimeSpan.Zero }, _time, speed);
         _zapret.Works("general", "ALT2", "ALT3");
         _zapret.Works("ALT", youtube: true, discord: false);
         _settings.Update(s => s.StrategyMode = StrategyModes.Fastest);
@@ -125,7 +125,7 @@ public sealed class WatchdogTests : IDisposable
     {
         var speed = new FakeSpeed(_zapret) { ["general"] = (4, 500), ["ALT"] = (4, 600), ["ALT2"] = (4, 700), ["ALT3"] = (4, 100) };
         var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
-            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero }, _time, speed);
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero, MinSwitchInterval = TimeSpan.Zero }, _time, speed);
         _zapret.Works("general", "ALT", "ALT2", "ALT3");
         _settings.Update(s => s.StrategyMode = StrategyModes.Fastest);
 
@@ -142,7 +142,7 @@ public sealed class WatchdogTests : IDisposable
     {
         var speed = new FakeSpeed(_zapret) { ["general"] = (0, 9000), ["ALT"] = (0, 9000), ["ALT2"] = (0, 9000), ["ALT3"] = (4, 300) };
         var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
-            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero }, _time, speed);
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero, MinSwitchInterval = TimeSpan.Zero }, _time, speed);
         _zapret.Works("ALT3");
         _settings.Update(s =>
         {
@@ -165,6 +165,137 @@ public sealed class WatchdogTests : IDisposable
 
         Assert.True(_telegram.IsRunning);
         Assert.True(_watchdog.Status.TelegramRunning);
+    }
+
+    private sealed class FakeActivity : IActivityMonitor
+    {
+        public string? Busy { get; set; }
+        public string? BusyReason() => Busy;
+    }
+
+    /// <summary>Сторож со спокойными настройками по умолчанию (пауза 15 минут) и подменой «компьютер занят».</summary>
+    private (Watchdog Watchdog, FakeActivity Activity, List<string> Log) Calm()
+    {
+        var activity = new FakeActivity();
+        var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
+            new WatchdogOptions { WarmUp = TimeSpan.Zero }, _time, activity: activity);
+        var log = new List<string>();
+        watchdog.Log += log.Add;
+        return (watchdog, activity, log);
+    }
+
+    [Fact]
+    public async Task Strategy_is_not_switched_again_within_15_minutes()
+    {
+        _zapret.Works("general", "ALT2");
+        var (watchdog, _, log) = Calm();
+        await watchdog.StartAsync(default);
+        _zapret.Started.Clear();
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        _zapret.Breaks("general");
+        await watchdog.CheckAsync(default);
+        await watchdog.CheckAsync(default);
+
+        // Рано: winws не трогаем, YouTube и Discord пока через VPN
+        Assert.Empty(_zapret.Started);
+        Assert.Equal(ZapretState.Partial, watchdog.Status.State);
+        Assert.Contains(Service.YouTube, watchdog.Status.ViaVpn);
+        Assert.Contains(log, l => l.Contains("Альт не меняю"));
+
+        // Ещё рано — и в журнале не повторяемся
+        var lines = log.Count;
+        await watchdog.CheckAsync(default);
+        Assert.Empty(_zapret.Started);
+        Assert.Equal(lines, log.Count);
+
+        // Прошло 15 минут с перебора — подбираем
+        _time.Advance(TimeSpan.FromMinutes(10));
+        await watchdog.CheckAsync(default);
+        Assert.Equal(["ALT", "ALT2"], _zapret.Started);
+        Assert.Equal(ZapretState.Working, watchdog.Status.State);
+        Assert.DoesNotContain(Service.YouTube, watchdog.Status.ViaVpn);
+    }
+
+    [Fact]
+    public async Task No_search_while_a_game_is_running()
+    {
+        _zapret.Works("general", "ALT2");
+        var (watchdog, activity, log) = Calm();
+        await watchdog.StartAsync(default);
+        _zapret.Started.Clear();
+
+        _time.Advance(TimeSpan.FromHours(1));
+        activity.Busy = "идёт игра (dota2.exe)";
+        _zapret.Breaks("general");
+        await watchdog.CheckAsync(default);
+        await watchdog.CheckAsync(default);
+        _time.Advance(TimeSpan.FromHours(2));
+        await watchdog.CheckAsync(default);
+
+        Assert.Empty(_zapret.Started);
+        Assert.Contains(log, l => l.Contains("dota2.exe"));
+
+        // Игру закрыли — подбор при следующей проверке
+        activity.Busy = null;
+        await watchdog.CheckAsync(default);
+        Assert.Equal(["ALT", "ALT2"], _zapret.Started);
+        Assert.Equal(ZapretState.Working, watchdog.Status.State);
+    }
+
+    [Fact]
+    public async Task Check_button_searches_even_during_a_game()
+    {
+        _zapret.Works("general", "ALT2");
+        var (watchdog, activity, _) = Calm();
+        await watchdog.StartAsync(default);
+        _zapret.Started.Clear();
+        activity.Busy = "идёт игра (dota2.exe)";
+        _zapret.Breaks("general");
+        await watchdog.CheckAsync(default);
+        await watchdog.CheckAsync(default);
+        Assert.Empty(_zapret.Started);
+
+        await watchdog.CheckAsync(default, manual: true);
+
+        Assert.Equal(["ALT", "ALT2"], _zapret.Started);
+    }
+
+    [Fact]
+    public async Task Hourly_retry_waits_while_computer_is_busy()
+    {
+        var (watchdog, activity, _) = Calm();
+        await watchdog.StartAsync(default);
+        Assert.Equal(ZapretState.Failed, watchdog.Status.State);
+        _zapret.Started.Clear();
+        _zapret.Works("ALT3");
+
+        activity.Busy = "открыто полноэкранное приложение";
+        _time.Advance(TimeSpan.FromHours(3));
+        await watchdog.CheckAsync(default);
+        Assert.Empty(_zapret.Started);
+        Assert.Equal(ZapretState.Failed, watchdog.Status.State);
+
+        activity.Busy = null;
+        await watchdog.CheckAsync(default);
+        Assert.Equal(ZapretState.Working, watchdog.Status.State);
+    }
+
+    [Fact]
+    public async Task Startup_speed_benchmark_waits_for_idle()
+    {
+        var speed = new FakeSpeed(_zapret) { ["general"] = (4, 9000), ["ALT"] = (4, 1000), ["ALT2"] = (4, 2500), ["ALT3"] = (4, 4000) };
+        _zapret.Works("general", "ALT", "ALT2", "ALT3");
+        _settings.Update(s => s.StrategyMode = StrategyModes.Fastest);
+        var activity = new FakeActivity { Busy = "идёт игра (VRChat.exe)" };
+        var watchdog = new Watchdog(_zapret, _telegram, _vpn, _probe, _settings,
+            new WatchdogOptions { WarmUp = TimeSpan.Zero, ScreenWarmUp = TimeSpan.Zero }, _time, speed, activity);
+
+        await watchdog.StartAsync(default);
+
+        // Замера не было — запущен первый рабочий альт, без двадцати перезапусков
+        Assert.Equal(["general"], _zapret.Started);
+        Assert.Null(_settings.Load().StrategyBenchmarkAt);
     }
 
     [Fact]

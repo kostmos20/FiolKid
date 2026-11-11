@@ -157,9 +157,20 @@ public sealed class SubscriptionTests : IDisposable
         Assert.Equal("FiolKid", (string?)tun["interface_name"]);
         Assert.False((bool?)tun["auto_route"]);
         var outbounds = config["outbounds"]!.AsArray();
-        Assert.Equal("urltest", (string?)outbounds[0]!["type"]);
-        Assert.Equal(servers.Count, outbounds[0]!["outbounds"]!.AsArray().Count);
-        Assert.Equal("auto", (string?)config["route"]!["final"]);
+        // Переключатель: «auto» или любой сервер (на время игры), по умолчанию — auto
+        Assert.Equal("selector", (string?)outbounds[0]!["type"]);
+        Assert.Equal("auto", (string?)outbounds[0]!["default"]);
+        Assert.Equal(servers.Count + 1, outbounds[0]!["outbounds"]!.AsArray().Count);
+        Assert.Equal("urltest", (string?)outbounds[1]!["type"]);
+        Assert.Equal(servers.Count, outbounds[1]!["outbounds"]!.AsArray().Count);
+        Assert.Equal("proxy", (string?)config["route"]!["final"]);
+
+        // Доступ к API вписывается при запуске: только 127.0.0.1 и пароль
+        var (withApi, port, secret) = SingBoxApi.WithApi(config.ToJsonString());
+        var api = JsonNode.Parse(withApi)!["experimental"]!["clash_api"]!;
+        Assert.Equal($"127.0.0.1:{port}", (string?)api["external_controller"]);
+        Assert.Equal(secret, (string?)api["secret"]);
+        Assert.Equal(32, secret.Length);
         Assert.True((bool?)config["route"]!["auto_detect_interface"]);
     }
 
@@ -173,7 +184,7 @@ public sealed class SubscriptionTests : IDisposable
 
         Directory.CreateDirectory(_dir);
         var path = Path.Combine(_dir, "config.json");
-        await File.WriteAllTextAsync(path, SingBoxConfig.Build(SubscriptionParser.Parse(Base64Body()).Servers, "FiolKid"));
+        await File.WriteAllTextAsync(path, SingBoxApi.WithApi(SingBoxConfig.Build(SubscriptionParser.Parse(Base64Body()).Servers, "FiolKid")).Conf);
 
         using var process = Process.Start(new ProcessStartInfo(singBox, $"check -c \"{path}\"")
         {

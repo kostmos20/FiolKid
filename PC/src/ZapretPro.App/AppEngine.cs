@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text;
 using ZapretPro.Core.Dns;
+using ZapretPro.Core.Games;
 using ZapretPro.Core.Health;
 using ZapretPro.Core.Infrastructure;
 using ZapretPro.Core.Key;
@@ -91,8 +92,23 @@ public sealed class AppEngine
             routes, dns, _settings);
         _vpn.Log += Write;
 
+        // Игры: монитор (любая игра и полноэкранное — пауза переключений), игры из списка — через VPN
+        var loaded = _settings.Load();
+        _gameModeEnabled = loaded.GameMode;
+        _gamesCache = loaded.Games ?? [];
+        EtwGameTraffic.StopLeftover(); // сессия ETW от упавшей программы мешала бы новой
+        _games = new GameMonitor(() => _gamesCache);
+        _gameRouter = new GameRouter(_settings, _vpn, ipv6: new GameIpv6Block());
+        _gameRouter.Log += Write;
+        _gameRouter.Saved += ReloadGames;
+        _vpn.Hold = () => GameModeActive;
+        _subscription.Hold = () => GameModeActive;
+        _vpn.Notice += m => Notice?.Invoke(m);
+        _games.Changed += OnGamesChanged;
+
         var checker = new HealthChecker(secret);
-        _watchdog = new Watchdog(_zapret, Telegram, _vpn, checker, _settings, speed: checker);
+        _watchdog = new Watchdog(_zapret, Telegram, _vpn, checker, _settings, speed: checker,
+            activity: new WindowsActivityMonitor(() => _games.Current.Busy));
         _watchdog.StatusChanged += s =>
         {
             Status = s;
@@ -100,6 +116,180 @@ public sealed class AppEngine
         };
         _watchdog.Log += Write;
         Status = _watchdog.Status;
+        _games.Start();
+    }
+
+    // ---------- Игры и игровой режим ----------
+
+    private readonly GameMonitor _games;
+    private readonly GameRouter _gameRouter;
+    private volatile IReadOnlyList<GameEntry> _gamesCache;
+    private volatile bool _gameModeEnabled;
+    private bool _gameModeWas;
+    private bool _listsDeferred;
+    private bool _updateDeferred;
+    private TimeSpan? _gamePing;
+    private Timer? _pingTimer;
+
+    /// <summary>Сообщение для человека (например, «VPN-сервер умер, перешёл на запасной») — показать в трее.</summary>
+    public event Action<string>? Notice;
+
+    /// <summary>Игровой режим включён в настройках.</summary>
+    public bool GameMode => _gameModeEnabled;
+
+    /// <summary>Игровой режим сейчас действует: он включён и идёт игра (любая) или полноэкранное приложение.</summary>
+    public bool GameModeActive => _gameModeEnabled && _games.Current.Playing;
+
+    /// <summary>Для главного окна и трея: «Игровой режим: VRChat — переключения на паузе» или null.</summary>
+    public string? GameModeText => GameModeActive ? $"Игровой режим: {_games.Current.Name} — переключения на паузе" : null;
+
+    public IReadOnlyList<GameEntry> Games => _gamesCache;
+
+    /// <summary>Какие игры из списка сейчас запущены.</summary>
+    public IReadOnlyList<GameEntry> RunningVpnGames => _games.Current.VpnGames.Select(g => g.Game).ToList();
+
+    /// <summary>Задержка через VPN, пока идёт игра из списка (null — не мерили или не отвечает).</summary>
+    public TimeSpan? GamePing => _gamePing;
+
+    public bool VpnTunnelUp => _vpn.TunnelRunning;
+
+    public void SetGameMode(bool on)
+    {
+        _settings.Update(s => s.GameMode = on);
+        _gameModeEnabled = on;
+        Write(on ? "Игровой режим включён: пока идёт игра, программа ничего не переключает" : "Игровой режим выключен");
+        OnGameModeMaybeChanged();
+        StatusChanged?.Invoke();
+    }
+
+    /// <summary>Добавить игру (exe или папку). Null — добавлена, иначе причина.</summary>
+    public string? AddGame(string path)
+    {
+        if (!File.Exists(path) && !Directory.Exists(path))
+            return "Такого файла или папки нет";
+        var game = GameEntry.FromPath(path);
+        if (_gamesCache.Any(g => g.Path.Equals(game.Path, StringComparison.OrdinalIgnoreCase)))
+            return "Эта игра уже в списке";
+        _settings.Update(s => (s.Games ??= []).Add(game));
+        Write($"Игра добавлена: {game.Name} ({game.Path})");
+        ReloadGames();
+        _games.Scan();
+        return null;
+    }
+
+    public void RemoveGame(string path)
+    {
+        _settings.Update(s => s.Games?.RemoveAll(g => g.Path.Equals(path, StringComparison.OrdinalIgnoreCase)));
+        _gameRouter.Forget(path);
+        Write($"Игра убрана из списка: {path}");
+        ReloadGames();
+        _games.Scan();
+    }
+
+    /// <summary>Кнопка «Сбросить»: забыть адреса и домены, которые программа узнала за игрой.</summary>
+    public void ResetGame(string path)
+    {
+        _gameRouter.Forget(path);
+        _settings.Update(s =>
+        {
+            foreach (var game in s.Games?.Where(g => g.Path.Equals(path, StringComparison.OrdinalIgnoreCase)) ?? [])
+            {
+                game.LearnedAddresses = [];
+                game.LearnedDomains = [];
+            }
+        });
+        Write($"Забыл, куда ходила игра: {path}");
+        ReloadGames();
+    }
+
+    private void ReloadGames()
+    {
+        _gamesCache = _settings.Load().Games ?? [];
+        StatusChanged?.Invoke();
+    }
+
+    private void OnGamesChanged(GameScan before, GameScan after)
+    {
+        // Зовётся из фонового таймера: любая ошибка здесь уронила бы всю программу
+        try
+        {
+            if (IsOn)
+            {
+                _gameRouter.Update(after);
+                // Игра из списка запустилась, а VPN не поднят — поднять сейчас, не дожидаясь плановой проверки
+                if (before.VpnGames.Count == 0 && after.VpnGames.Count > 0 && !_vpn.TunnelRunning)
+                    _ = CheckNowAsync();
+            }
+            UpdatePingTimer(after.VpnGames.Count > 0);
+            OnGameModeMaybeChanged();
+        }
+        catch (Exception e)
+        {
+            Write($"Игры: ошибка — {e.Message}");
+        }
+        StatusChanged?.Invoke();
+    }
+
+    private void OnGameModeMaybeChanged()
+    {
+        var active = GameModeActive;
+        if (active == _gameModeWas)
+            return;
+        _gameModeWas = active;
+        if (active)
+        {
+            Write($"{GameModeText}: стратегию и сервер не меняю, замеры и обновления отложены");
+            if (_cts is { IsCancellationRequested: false } cts)
+                _ = Task.Run(() => _vpn.SyncPinAsync(cts.Token));
+            return;
+        }
+        Write("Игра закончилась — выполняю отложенное");
+        _ = Task.Run(RunDeferredAsync);
+    }
+
+    /// <summary>Игра закрылась — сразу всё отложенное: проверка и перебор, списки, обновления, снова автовыбор сервера.</summary>
+    private async Task RunDeferredAsync()
+    {
+        try
+        {
+            if (_cts is { IsCancellationRequested: false } cts)
+            {
+                await _vpn.SyncPinAsync(cts.Token);
+                await CheckNowAsync();
+                if (_listsDeferred)
+                {
+                    _listsDeferred = false;
+                    await RefreshListsOnceAsync(cts.Token);
+                }
+            }
+            if (_updateDeferred)
+            {
+                _updateDeferred = false;
+                await CheckUpdatesAsync();
+            }
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Http.HttpRequestException)
+        {
+        }
+    }
+
+    /// <summary>Пока идёт игра из списка — раз в 30 секунд меряем задержку через VPN для карточки игры.</summary>
+    private void UpdatePingTimer(bool on)
+    {
+        if (on && _pingTimer is null)
+            _pingTimer = new Timer(_ => _ = MeasurePingAsync(), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30));
+        else if (!on && _pingTimer is not null)
+        {
+            _pingTimer.Dispose();
+            _pingTimer = null;
+            _gamePing = null;
+        }
+    }
+
+    private async Task MeasurePingAsync()
+    {
+        _gamePing = _vpn.TunnelRunning ? await TunnelProbe.MeasureAsync(CancellationToken.None) : null;
+        StatusChanged?.Invoke();
     }
 
     private readonly AmneziaProfile _amnezia;
@@ -179,11 +369,31 @@ public sealed class AppEngine
                 Write($"ОШИБКА: {e}");
             }
         }, ct);
+        // Игра уже запущена — подхватить её сразу после включения
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                _gameRouter.Update(_games.Current);
+            }
+            catch (Exception e)
+            {
+                Write($"Игры: ошибка — {e.Message}");
+            }
+        });
         StatusChanged?.Invoke();
     }
 
     public async Task TurnOffAsync(bool remember = true)
     {
+        try
+        {
+            _gameRouter.Update(GameScan.None);
+        }
+        catch (Exception e)
+        {
+            Write($"Игры: ошибка — {e.Message}");
+        }
         if (remember)
             _settings.Update(s => s.Enabled = false);
         _cts?.Cancel();
@@ -216,13 +426,13 @@ public sealed class AppEngine
         }
     }
 
-    public async Task CheckNowAsync()
+    public async Task CheckNowAsync(bool manual = false)
     {
         if (_cts is not { IsCancellationRequested: false } cts)
             return;
         try
         {
-            await Task.Run(() => _watchdog.CheckAsync(cts.Token));
+            await Task.Run(() => _watchdog.CheckAsync(cts.Token, manual));
         }
         catch (OperationCanceledException)
         {
@@ -396,6 +606,9 @@ public sealed class AppEngine
         sb.AppendLine($"Включено: {(IsOn ? "да" : "нет")}; состояние: {s.State}; стратегия: {s.StrategyId ?? "—"} ({s.StrategyNumber} из {s.StrategyCount})");
         sb.AppendLine($"VPN: {s.Vpn.State}, маршрутов {s.Vpn.RouteCount}, свой DNS: {(s.Vpn.SmartDns ? "да" : "нет")}, запасной канал: {string.Join(", ", s.Vpn.Fallback)}");
         sb.AppendLine($"VPN через: {s.Vpn.Profile ?? "—"}; {KeyState().Text}; {SubscriptionState().Text}");
+        sb.AppendLine($"Игровой режим: {(GameMode ? "включён" : "выключен")}" +
+                      (_games.Current.Playing ? $", сейчас идёт: {_games.Current.Busy}" : "") +
+                      (Games.Count > 0 ? $"; игры через VPN: {string.Join(", ", Games.Select(g => $"{g.Name} (адресов {g.LearnedAddresses.Count}, доменов {g.LearnedDomains.Count})"))}" : ""));
         if (_vpn.Unstable)
             sb.AppendLine("DNS через VPN часто не отвечает: запросы через туннель теряются (бывает, когда ключ включён ещё на одном устройстве или сервер режет UDP)");
         foreach (var service in Enum.GetValues<Service>())
@@ -524,19 +737,28 @@ public sealed class AppEngine
     {
         while (!ct.IsCancellationRequested)
         {
-            try
-            {
-                if (await _lists.RefreshIfStaleAsync(ct))
-                {
-                    Write("Список заблокированных сайтов обновлён");
-                    _vpn.ReloadLists();
-                }
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-                Write($"Не удалось сохранить список сайтов: {e.Message}");
-            }
+            // Во время игры список не обновляем: подождёт до конца игры (RunDeferredAsync)
+            if (GameModeActive)
+                _listsDeferred = true;
+            else
+                await RefreshListsOnceAsync(ct);
             await Task.Delay(ListRefreshInterval, ct);
+        }
+    }
+
+    private async Task RefreshListsOnceAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (await _lists.RefreshIfStaleAsync(ct))
+            {
+                Write("Список заблокированных сайтов обновлён");
+                _vpn.ReloadLists();
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Write($"Не удалось сохранить список сайтов: {e.Message}");
         }
     }
 
@@ -673,7 +895,11 @@ public sealed class AppEngine
         await Task.Delay(TimeSpan.FromMinutes(1));
         while (true)
         {
-            await CheckUpdatesAsync();
+            // Во время игры не проверяем: проверим сразу после игры
+            if (GameModeActive)
+                _updateDeferred = true;
+            else
+                await CheckUpdatesAsync();
             await Task.Delay(UpdateCheckInterval);
         }
     });
