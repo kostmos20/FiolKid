@@ -124,9 +124,32 @@ public sealed class SubscriptionClient
         return new CachedSubscription(body, headers, time.GetUtcNow());
     }
 
+    /// <summary>
+    /// Сначала напрямую: Happ, v2rayN и им подобные оставляют в Windows прокси вида 127.0.0.1:10809,
+    /// который после их закрытия никто не слушает. Через системный прокси — только если напрямую не вышло.
+    /// </summary>
     private static async Task<(string, Dictionary<string, string>)> FetchAsync(string url, CancellationToken ct)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        try
+        {
+            return await FetchAsync(url, useProxy: false, ct);
+        }
+        catch (Exception direct) when (direct is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            try
+            {
+                return await FetchAsync(url, useProxy: true, ct);
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+            {
+                throw direct is HttpRequestException ? direct : e;
+            }
+        }
+    }
+
+    private static async Task<(string, Dictionary<string, string>)> FetchAsync(string url, bool useProxy, CancellationToken ct)
+    {
+        using var http = new HttpClient(new SocketsHttpHandler { UseProxy = useProxy }) { Timeout = TimeSpan.FromSeconds(12) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         using var response = await http.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();

@@ -15,7 +15,7 @@ public static class DnsRecoveryNote
         try
         {
             Directory.CreateDirectory(AppPaths.DataDir);
-            File.AppendAllText(FilePath, $"{DateTime.Now:HH:mm:ss}  {message}{Environment.NewLine}");
+            File.AppendAllText(FilePath, $"{DateTime.Now:dd.MM HH:mm:ss}  {message}{Environment.NewLine}");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

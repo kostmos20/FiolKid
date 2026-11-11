@@ -99,7 +99,17 @@ public partial class SettingsPage : UserControl
 
     private async Task PasteAsync(Button button, CredentialKind kind, string empty)
     {
-        var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+        string text;
+        try
+        {
+            text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            // Буфер обмена держит другая программа
+            Toast?.Invoke("Буфер обмена занят другой программой — попробуй ещё раз");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(text))
         {
             Toast?.Invoke(empty);
@@ -111,11 +121,23 @@ public partial class SettingsPage : UserControl
         try
         {
             Toast?.Invoke(await _engine.SaveKeyAsync(text, kind));
-            Clipboard.Clear();
+            try
+            {
+                Clipboard.Clear();
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+            }
         }
         catch (KeyParseException ex)
         {
             Toast?.Invoke(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("вставка ключа или подписки", ex);
+            _engine.Note($"Не получилось вставить: {ex.GetType().Name}: {ex.Message}");
+            Toast?.Invoke($"Не получилось: {ex.Message}");
         }
         finally
         {

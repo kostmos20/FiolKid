@@ -88,9 +88,9 @@ public partial class LogPage : UserControl
 
     private LogEvent ToEvent(string line)
     {
-        // Строка журнала: «12:19:35  Текст»
-        var time = line.Length > 10 && line[2] == ':' && line[5] == ':' ? line[..8] : "";
-        var message = time.Length > 0 ? line[8..].TrimStart() : line;
+        // Строка журнала: «11.11 12:19:35  Текст» (старые записи — «12:19:35  Текст»)
+        var time = System.Text.RegularExpressions.Regex.Match(line, @"^(\d\d\.\d\d )?\d\d:\d\d:\d\d").Value;
+        var message = time.Length > 0 ? line[time.Length..].TrimStart() : line;
         var (title, detail) = Split(message);
         var kind = ColorOf(line) switch
         {

@@ -638,4 +638,57 @@ public sealed class DnsTests
         Assert.Contains("прошлый ответ через VPN", dns.Recent[^1]);
         Assert.All(resolved, ip => Assert.Equal(IPAddress.Parse("104.18.32.47"), ip));
     }
+
+    private static byte[] NotFound(byte[] query)
+    {
+        var answer = Answer(query);
+        answer[3] = 0x83; // NXDOMAIN
+        answer[7] = 0;
+        return answer[..(answer.Length - 18)];
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task When_the_provider_hides_a_site_the_address_comes_from_the_tunnel_dns_but_the_site_stays_direct(bool nxdomain)
+    {
+        // Отчёт: www.youtube.com — HostNotFound на всех альтах, хотя redirector.googlevideo.com находится
+        using var provider = new FakeUpstream("", q => nxdomain ? NotFound(q) : Answer(q));
+        using var secure = new FakeUpstream("142.250.74.110");
+        var resolved = new List<(IPAddress, RouteSet)>();
+        await using var dns = Dns(provider, secure, resolved);
+
+        var answer = await dns.HandleAsync(Query("www.youtube.com", 1), default);
+
+        Assert.Equal([IPAddress.Parse("142.250.74.110")], DnsMessage.ReadARecords(answer));
+        Assert.Empty(resolved); // не в VPN: YouTube открывает zapret
+        Assert.Contains("DNS провайдера не дал адрес", dns.Recent[^1]);
+    }
+
+    [Fact]
+    public async Task Without_the_tunnel_or_for_local_names_the_provider_answer_stays()
+    {
+        using var provider = new FakeUpstream("", NotFound);
+        using var secure = new FakeUpstream("142.250.74.110");
+        var resolved = new List<(IPAddress, RouteSet)>();
+
+        await using (var down = Dns(provider, secure, resolved, tunnelUp: false))
+            Assert.Empty(DnsMessage.ReadARecords(await down.HandleAsync(Query("www.youtube.com", 1), default)));
+        await using (var up = Dns(provider, secure, resolved))
+            Assert.Empty(DnsMessage.ReadARecords(await up.HandleAsync(Query("nas.local", 1), default)));
+        Assert.Empty(secure.Asked);
+    }
+
+    [Fact]
+    public async Task Sites_the_provider_resolves_are_not_asked_through_the_tunnel()
+    {
+        using var provider = new FakeUpstream("5.255.255.70");
+        using var secure = new FakeUpstream("1.2.3.4");
+        await using var dns = Dns(provider, secure, []);
+
+        var answer = await dns.HandleAsync(Query("ya.ru", 1), default);
+
+        Assert.Equal([IPAddress.Parse("5.255.255.70")], DnsMessage.ReadARecords(answer));
+        Assert.Empty(secure.Asked);
+    }
 }

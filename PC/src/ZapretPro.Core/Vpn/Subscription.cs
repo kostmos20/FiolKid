@@ -71,14 +71,25 @@ public static class SubscriptionParser
                 title = DecodeTitle(t);
             if (headers.TryGetValue("subscription-userinfo", out var info)
                 && Regex.Match(info, @"expire=(\d+)") is { Success: true } m
-                && long.TryParse(m.Groups[1].Value, out var unix) && unix > 0)
-                expires = DateTimeOffset.FromUnixTimeSeconds(unix);
+                && long.TryParse(m.Groups[1].Value, out var unix))
+                expires = ExpiresAt(unix);
             if (headers.TryGetValue("profile-update-interval", out var hours)
                 && double.TryParse(hours, System.Globalization.CultureInfo.InvariantCulture, out var h) && h is > 0 and < 24 * 30)
                 interval = TimeSpan.FromHours(h);
         }
 
         return new ParsedSubscription(title, expires, interval, servers, skipped);
+    }
+
+    /// <summary>
+    /// Срок из заголовка. Одни сервисы пишут секунды, другие — миллисекунды, третьи «вечный» срок
+    /// огромным числом: всё, что не похоже на дату до 2200 года, считаем «без срока».
+    /// </summary>
+    internal static DateTimeOffset? ExpiresAt(long unix)
+    {
+        if (unix >= 100_000_000_000)
+            unix /= 1000;
+        return unix is > 0 and < 7_258_118_400 ? DateTimeOffset.FromUnixTimeSeconds(unix) : null;
     }
 
     /// <summary>Подписка обычно — base64 со ссылками; бывает и просто текст со ссылками.</summary>

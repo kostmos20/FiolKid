@@ -650,6 +650,11 @@ public sealed class AppEngine
                     ? $"{e.PingMs} мс{(e.Mbps is { } m ? $", {m} Мбит/с" : "")}{(e.Country is { } c ? $", выход {c}" : "")}"
                     : e.Problem ?? "не отвечает"));
         }
+        if (CrashLog.Recent() is { } crash)
+        {
+            sb.AppendLine("--- последний сбой ---");
+            sb.AppendLine(crash);
+        }
         sb.AppendLine("--- журнал ---");
         foreach (var line in Log)
             sb.AppendLine(line);
@@ -767,7 +772,7 @@ public sealed class AppEngine
 
     private void Write(string message)
     {
-        var line = $"{DateTime.Now:HH:mm:ss}  {message}";
+        var line = $"{DateTime.Now:dd.MM HH:mm:ss}  {message}";
         lock (_log)
         {
             _log.Add(line);

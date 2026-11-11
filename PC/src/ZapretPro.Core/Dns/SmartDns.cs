@@ -169,10 +169,22 @@ public sealed class SmartDns : IAsyncDisposable
             return DnsMessage.EmptyAnswer(query);
         }
 
-        var set = TunnelUp() ? Classify(name) : null;
+        var tunnelUp = TunnelUp();
+        var set = tunnelUp ? Classify(name) : null;
         if (set is null)
         {
             var plain = await ForwardAsync(query, _normalUpstreams, ct);
+            if (tunnelUp && NoAddress(plain, type) && WorthAskingTunnel(name))
+            {
+                // Провайдер подменил ответ «такого сайта нет» (так бывает с www.youtube.com) или промолчал —
+                // берём адрес у DNS через VPN. Сам сайт по-прежнему идёт напрямую, через zapret
+                var secure = await ForwardAsync(query, _secureUpstreams, ct);
+                if (secure is not null && !NoAddress(secure, type))
+                {
+                    NoteProviderMiss(name);
+                    plain = secure;
+                }
+            }
             if (plain is null)
                 return DnsMessage.ServerFailure(query);
             Remember(name, plain);
@@ -222,6 +234,40 @@ public sealed class SmartDns : IAsyncDisposable
             }
         }
         return answer;
+    }
+
+    /// <summary>Ответа нет, «такого имени нет», сбой — или на вопрос об IPv4 ни одного адреса IPv4.</summary>
+    internal static bool NoAddress(byte[]? answer, ushort type)
+    {
+        if (answer is null || answer.Length < 12)
+            return true;
+        var code = answer[3] & 0x0F;
+        if (code is 2 or 3)
+            return true;
+        return type == DnsMessage.TypeA && code == 0 && DnsMessage.ReadARecords(answer).Count == 0;
+    }
+
+    private static readonly string[] LocalSuffixes =
+        [".local", ".lan", ".home", ".internal", ".localdomain", ".corp", ".arpa", ".invalid", ".test"];
+
+    /// <summary>Только настоящие сайты: имена локальной сети и компьютеров в VPN не отправляем.</summary>
+    internal static bool WorthAskingTunnel(string name) =>
+        name.Contains('.') && !LocalSuffixes.Any(s => name.EndsWith(s, StringComparison.OrdinalIgnoreCase));
+
+    private DateTime _lastProviderMissLog = DateTime.MinValue;
+
+    private void NoteProviderMiss(string name)
+    {
+        Remember($"{name}: DNS провайдера не дал адрес — взял через VPN (сайт идёт мимо VPN)");
+        var now = DateTime.UtcNow;
+        lock (_recent)
+        {
+            if (now - _lastProviderMissLog < LogQuietPeriod)
+                return;
+            _lastProviderMissLog = now;
+        }
+        Log?.Invoke($"DNS провайдера не дал адрес {name} (похоже на подмену) — беру адрес у DNS через VPN, " +
+                    "сам сайт идёт напрямую через zapret");
     }
 
     // Последние ответы, полученные через туннель: выручают, когда туннель на минуту перестал отвечать на DNS
@@ -309,7 +355,7 @@ public sealed class SmartDns : IAsyncDisposable
     {
         lock (_recent)
         {
-            _recent.Enqueue($"{DateTime.Now:HH:mm:ss} {line}");
+            _recent.Enqueue($"{DateTime.Now:dd.MM HH:mm:ss} {line}");
             while (_recent.Count > 20)
                 _recent.Dequeue();
         }

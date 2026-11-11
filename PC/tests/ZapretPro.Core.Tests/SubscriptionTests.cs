@@ -53,6 +53,20 @@ public sealed class SubscriptionTests : IDisposable
         Assert.Equal(2, sub.Skipped); // xhttp и vmess sing-box-ом в нашей сборке не берём
     }
 
+    [Theory]
+    [InlineData("expire=1793712905000", 1793712905L)] // миллисекунды
+    [InlineData("expire=99999999999999999", null)]    // «вечная» подписка
+    [InlineData("expire=0", null)]
+    [InlineData("expire=9223372036854775807", null)]
+    public void Odd_expiry_values_do_not_crash(string info, long? seconds)
+    {
+        // Отчёт: программа закрывалась при вставке ссылки — FromUnixTimeSeconds падал на огромном сроке
+        var sub = SubscriptionParser.Parse(Base64Body(), new Dictionary<string, string> { ["subscription-userinfo"] = info });
+
+        Assert.Equal(seconds is { } s ? DateTimeOffset.FromUnixTimeSeconds(s) : null, sub.Expires);
+        Assert.Equal(5, sub.Servers.Count);
+    }
+
     [Fact]
     public void Plain_text_subscription_and_line_wrapped_base64_work()
     {

@@ -18,6 +18,7 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        WatchCrashes();
 
         if (e.Args.FirstOrDefault() == "--dns-guard")
         {
@@ -70,6 +71,37 @@ public partial class App : Application
         if (Engine.WasEnabled)
             Engine.TurnOn();
         Engine.StartUpdateChecks();
+    }
+
+    /// <summary>
+    /// Ошибка в окне — записать и жить дальше (без этого программа молча закрывалась). Ошибка в фоновом
+    /// потоке процесс всё равно завершит, но причина останется в файле и попадёт в отчёт.
+    /// </summary>
+    private void WatchCrashes()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            CrashLog.Write("окно", args.Exception);
+            args.Handled = true;
+            try
+            {
+                Engine?.Note($"Ошибка в программе (работаю дальше): {args.Exception.GetType().Name}: {args.Exception.Message}");
+            }
+            catch
+            {
+                // Записать в журнал не вышло — главное, что не упали
+            }
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+                CrashLog.Write("фон", ex);
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            CrashLog.Write("задача", args.Exception);
+            args.SetObserved();
+        };
     }
 
     public void ShowMain()
