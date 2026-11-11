@@ -16,7 +16,8 @@ $root = Split-Path $PSScriptRoot -Parent
 
 # gh — установленный в системе или распакованный рядом с проектом (F:\Program\FiolKid-tools\gh)
 $ghCommand = Get-Command gh -ErrorAction SilentlyContinue
-$gh = if ($ghCommand) { $ghCommand.Source } else { Join-Path (Split-Path $root -Parent) 'FiolKid-tools\gh\bin\gh.exe' }
+# Проект лежит в F:\Program\ZapretPro\PC, поэтому FiolKid-tools — на два уровня выше
+$gh = if ($ghCommand) { $ghCommand.Source } else { Join-Path (Split-Path (Split-Path $root -Parent) -Parent) 'FiolKid-tools\gh\bin\gh.exe' }
 if (-not (Test-Path $gh)) { throw "Не нашёл GitHub CLI (gh): $gh" }
 function gh { & $gh @args }
 
