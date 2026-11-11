@@ -106,6 +106,7 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
     // Игры через VPN: адреса, куда ходят их процессы, и домены, которые программа за ними запомнила
     private readonly HashSet<IPAddress> _gameIps = [];
     private IReadOnlyList<string> _gameDomains = [];
+    private IReadOnlyList<IPNetwork> _gameNets = [];
 
     public VpnController(IReadOnlyList<IVpnProfile> profiles, Func<Router> routerFactory, IRouteTable routes, IDnsHijack? dns,
         SettingsStore? settings = null, TimeProvider? time = null, TimeSpan? handshakeWait = null,
@@ -376,7 +377,7 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
     /// Что игр из списка сейчас нужно вести через VPN: запомненные адреса и домены. Пусто — игр нет.
     /// Новые адреса добавляются по ходу через <see cref="AddGameAddress"/>.
     /// </summary>
-    public void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains)
+    public void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains, IReadOnlyList<IPNetwork> networks)
     {
         lock (_lock)
         {
@@ -384,11 +385,14 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
             foreach (var ip in addresses.Where(Routable))
                 _gameIps.Add(ip);
             _gameDomains = domains;
+            _gameNets = networks.Where(n => n.BaseAddress.AddressFamily == AddressFamily.InterNetwork && n.PrefixLength >= 8).ToList();
             _matcherFor = null; // перестроить классификатор доменов при следующей проверке
             if (_runningConf is not null)
             {
                 foreach (var ip in _gameIps)
                     _routes.Add(new IPNetwork(ip, 32));
+                foreach (var net in _gameNets)
+                    _routes.Add(net);
             }
         }
         RebuildClassifier();
@@ -497,6 +501,11 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
             {
                 if (!_endpoints.Contains(ip))
                     wanted.Add(new IPNetwork(ip, 32));
+            }
+            foreach (var net in _gameNets)
+            {
+                if (!_endpoints.Any(net.Contains))
+                    wanted.Add(net);
             }
             _routes.Sync(wanted);
         }

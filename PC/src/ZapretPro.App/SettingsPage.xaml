@@ -205,9 +205,22 @@
                             </StackPanel>
                         </CheckBox>
                         <TextBlock x:Name="ServersHint" Style="{StaticResource Hint}" Margin="0,14,0,4"/>
-                        <ListBox x:Name="ServersList" ItemContainerStyle="{StaticResource RowItem}" ItemTemplate="{StaticResource ScoreRow}"
-                                 Background="Transparent" BorderThickness="0" MaxHeight="290" Margin="0,0,0,13"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="ServersList_SelectionChanged"/>
+                        <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Margin="0,10,0,14" Padding="0,10,0,0">
+                            <Expander x:Name="ServersExpander" Style="{StaticResource Disclosure}">
+                                <Expander.Header>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Все серверы" Foreground="#FFB9BBC7" FontSize="12"/>
+                                        <Border CornerRadius="5" Background="#08FFFFFF" Padding="6,1" Margin="6,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock x:Name="ServersCount" FontSize="10" Foreground="#FFB9BBC7"/>
+                                        </Border>
+                                    </StackPanel>
+                                </Expander.Header>
+                                <ListBox x:Name="ServersList" ItemContainerStyle="{StaticResource RowItem}" ItemTemplate="{StaticResource ScoreRow}"
+                                         Background="Transparent" BorderThickness="0" MaxHeight="290" Margin="0,4,0,0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="ServersList_SelectionChanged"
+                                         PreviewMouseWheel="List_PreviewMouseWheel"/>
+                            </Expander>
+                        </Border>
                         <Button x:Name="MeasureServersButton" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
                                 Click="MeasureServers_Click">
                             <StackPanel Orientation="Horizontal">
@@ -291,7 +304,8 @@
                             </Expander.Header>
                             <ListBox x:Name="StrategiesList" ItemContainerStyle="{StaticResource RowItem}" ItemTemplate="{StaticResource ScoreRow}"
                                      Background="Transparent" BorderThickness="0" MaxHeight="300" Margin="0,4,0,0"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="StrategiesList_SelectionChanged"/>
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" SelectionChanged="StrategiesList_SelectionChanged"
+                                     PreviewMouseWheel="List_PreviewMouseWheel"/>
                         </Expander>
                     </Border>
                     <Button x:Name="BenchmarkButton" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Click="Benchmark_Click">

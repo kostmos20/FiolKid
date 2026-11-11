@@ -10,8 +10,8 @@ public interface IGameRoutes
     /// <summary>Туннель поднят.</summary>
     bool TunnelRunning { get; }
 
-    /// <summary>Что игр сейчас вести в VPN: запомненные адреса и домены. Пусто — игр нет.</summary>
-    void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains);
+    /// <summary>Что игр сейчас вести в VPN: запомненные адреса, домены и подсети из готовых наборов. Пусто — игр нет.</summary>
+    void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains, IReadOnlyList<IPNetwork> networks);
 
     /// <summary>Новый адрес игры — сразу маршрут. True — маршрут поставлен только что.</summary>
     bool AddGameAddress(IPAddress address);
@@ -37,6 +37,7 @@ public sealed class GameRouter : IDisposable
     private readonly Func<IReadOnlySet<int>, IPAddress, int> _closeTcp;
     private readonly Func<IReadOnlySet<int>, IReadOnlyList<IPAddress>> _openTcp;
     private readonly Func<int, string?> _pathOf;
+    private readonly Func<GamePresets> _presets;
     private readonly object _lock = new();
 
     // pid → игра; pid не игры — чтобы не спрашивать путь на каждый пакет
@@ -49,8 +50,9 @@ public sealed class GameRouter : IDisposable
 
     public GameRouter(SettingsStore settings, IGameRoutes routes, IGameTraffic? traffic = null, GameIpv6Block? ipv6 = null,
         Func<IReadOnlySet<int>, IPAddress, int>? closeTcp = null, Func<IReadOnlySet<int>, IReadOnlyList<IPAddress>>? openTcp = null,
-        Func<int, string?>? pathOf = null)
+        Func<int, string?>? pathOf = null, Func<GamePresets>? presets = null)
     {
+        _presets = presets ?? (() => GamePresets.Empty);
         _settings = settings;
         _routes = routes;
         _traffic = traffic ?? new EtwGameTraffic();
@@ -111,6 +113,8 @@ public sealed class GameRouter : IDisposable
         // Запомненное — сразу в VPN, с первого пакета
         var ips = new HashSet<IPAddress>(_seen.Keys);
         var domains = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var networks = new List<IPNetwork>();
+        var presets = _presets();
         foreach (var game in _running)
         {
             foreach (var ip in game.LearnedAddresses)
@@ -119,8 +123,16 @@ public sealed class GameRouter : IDisposable
                     ips.Add(parsed);
             }
             domains.UnionWith(game.LearnedDomains);
+            // Готовый набор (Roblox, VRChat): его серверы — через VPN с самого первого запуска
+            if (presets.For(game.Name, game.Path) is { } preset)
+            {
+                domains.UnionWith(preset.Domains);
+                networks.AddRange(preset.Networks);
+                if (!wasRunning)
+                    Log?.Invoke($"{game.Name}: готовый набор — доменов {preset.Domains.Count}, подсетей {preset.Networks.Count} через VPN");
+            }
         }
-        _routes.SetGameTargets(ips, domains.ToList());
+        _routes.SetGameTargets(ips, domains.ToList(), networks.Distinct().ToList());
 
         if (_ipv6?.Update(scan.VpnGames.SelectMany(g => g.Exes).ToList()) is { } ipv6Error)
             Log?.Invoke($"Не удалось закрыть игре IPv6: {ipv6Error}");
@@ -137,7 +149,7 @@ public sealed class GameRouter : IDisposable
     {
         _traffic.Stop();
         _ipv6?.Update([]);
-        _routes.SetGameTargets([], []);
+        _routes.SetGameTargets([], [], []);
         Log?.Invoke($"Игры закрыты — их адреса больше не идут через VPN (было {_seen.Count})");
         _seen.Clear();
         _pids.Clear();

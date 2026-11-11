@@ -88,13 +88,15 @@ public sealed class GameTests : IDisposable
         public bool TunnelRunning { get; set; } = true;
         public HashSet<IPAddress> Routed { get; } = [];
         public List<string> Domains { get; private set; } = [];
+        public List<IPNetwork> Networks { get; private set; } = [];
         public Dictionary<IPAddress, string> Names { get; } = [];
 
-        public void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains)
+        public void SetGameTargets(IReadOnlyCollection<IPAddress> addresses, IReadOnlyList<string> domains, IReadOnlyList<IPNetwork> networks)
         {
             Routed.Clear();
             Routed.UnionWith(addresses);
             Domains = domains.ToList();
+            Networks = networks.ToList();
         }
 
         public bool AddGameAddress(IPAddress address) => Routed.Add(address);
@@ -133,6 +135,25 @@ public sealed class GameTests : IDisposable
             _ => open ?? [],
             pid => paths?.GetValueOrDefault(pid));
         return (router, routes, traffic, settings, closed);
+    }
+
+    [Fact]
+    public void Preset_of_the_game_goes_to_vpn_from_the_first_launch_and_is_removed_after()
+    {
+        var game = Game(@"C:\Users\a\AppData\Local\Roblox", "Roblox");
+        var settings = new SettingsStore(Path.Combine(_dir, "settings.json"));
+        settings.Update(s => s.Games = [game]);
+        var routes = new FakeRoutes();
+        var presets = GamePresets.Parse("[roblox]\nroblox.com\n128.116.0.0/17");
+        var router = new GameRouter(settings, routes, new FakeTraffic(), null, (_, _) => 0, _ => [], _ => null, () => presets);
+
+        router.Update(Running(game, 10));
+        Assert.Equal([IPNetwork.Parse("128.116.0.0/17")], routes.Networks);
+        Assert.Contains("roblox.com", routes.Domains);
+
+        router.Update(GameScan.None);
+        Assert.Empty(routes.Networks);
+        Assert.Empty(routes.Domains);
     }
 
     private static GameScan Running(GameEntry game, params int[] pids) =>

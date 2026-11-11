@@ -98,13 +98,15 @@ public sealed class AppEngine
         _gamesCache = loaded.Games ?? [];
         EtwGameTraffic.StopLeftover(); // сессия ETW от упавшей программы мешала бы новой
         _games = new GameMonitor(() => _gamesCache);
-        _gameRouter = new GameRouter(_settings, _vpn, ipv6: new GameIpv6Block());
+        _presets = () => GamePresets.Load(vpnDir, updatedDir);
+        _gameRouter = new GameRouter(_settings, _vpn, ipv6: new GameIpv6Block(), presets: _presets);
         _gameRouter.Log += Write;
         _gameRouter.Saved += ReloadGames;
         _vpn.Hold = () => GameModeActive;
         _subscription.Hold = () => GameModeActive;
         _vpn.Notice += m => Notice?.Invoke(m);
         _games.Changed += OnGamesChanged;
+        _ = FindGamesAsync(quiet: true);
 
         var checker = new HealthChecker(secret);
         _watchdog = new Watchdog(_zapret, Telegram, _vpn, checker, _settings, speed: checker,
@@ -123,6 +125,41 @@ public sealed class AppEngine
 
     private readonly GameMonitor _games;
     private readonly GameRouter _gameRouter;
+    private readonly Func<GamePresets> _presets;
+    private volatile IReadOnlyList<FoundGame> _found = [];
+
+    /// <summary>Установленные игры, которые нашёл автопоиск.</summary>
+    public IReadOnlyList<FoundGame> FoundGames => _found;
+
+    public bool SearchingGames { get; private set; }
+
+    /// <summary>Поискать установленные игры (Steam, Epic, GOG, Roblox…). Найденные узнаёт и игровой режим.</summary>
+    public async Task FindGamesAsync(bool quiet = false)
+    {
+        if (SearchingGames)
+            return;
+        SearchingGames = true;
+        StatusChanged?.Invoke();
+        try
+        {
+            _found = await Task.Run(InstalledGames.Find);
+            _games.SetFoundFolders(_found.Select(g => g.Path).ToList());
+            if (!quiet)
+                Write($"Нашёл установленных игр: {_found.Count}");
+        }
+        catch (Exception e)
+        {
+            Write($"Не удалось поискать игры: {e.Message}");
+        }
+        finally
+        {
+            SearchingGames = false;
+            StatusChanged?.Invoke();
+        }
+    }
+
+    /// <summary>Для этой игры есть готовый набор адресов — значит, ей обычно нужен VPN (Roblox, VRChat).</summary>
+    public bool UsuallyNeedsVpn(string name, string path) => _presets().For(name, path) is not null;
     private volatile IReadOnlyList<GameEntry> _gamesCache;
     private volatile bool _gameModeEnabled;
     private bool _gameModeWas;
@@ -163,11 +200,13 @@ public sealed class AppEngine
     }
 
     /// <summary>Добавить игру (exe или папку). Null — добавлена, иначе причина.</summary>
-    public string? AddGame(string path)
+    public string? AddGame(string path, string? name = null)
     {
         if (!File.Exists(path) && !Directory.Exists(path))
             return "Такого файла или папки нет";
         var game = GameEntry.FromPath(path);
+        if (!string.IsNullOrWhiteSpace(name))
+            game.Name = name;
         if (_gamesCache.Any(g => g.Path.Equals(game.Path, StringComparison.OrdinalIgnoreCase)))
             return "Эта игра уже в списке";
         _settings.Update(s => (s.Games ??= []).Add(game));

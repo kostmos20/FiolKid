@@ -16,6 +16,8 @@ public sealed class ListUpdater
     [
         ("blocked-domains.txt", [Base + "Russia/inside-raw.lst"], 500),
         ("blocked-cidr.txt", [Base + "Subnets/IPv4/meta.lst", Base + "Subnets/IPv4/twitter.lst"], 10),
+        // Наборы для игр (Roblox, VRChat) — из нашего репозитория: поправил файл — у всех обновилось без выпуска
+        (Games.GamePresets.FileName, ["https://raw.githubusercontent.com/kostmos20/FiolKid/main/PC/data/vpn/game-presets.txt"], 4),
     ];
 
     private readonly string _dir;

@@ -1,0 +1,24 @@
+# Наборы для игр, которым в России нужен VPN. Секция [id] — по ней узнаётся игра (по имени или папке).
+# Домены — со всеми поддоменами; подсети — серверы игры. Через VPN идут, пока игра запущена.
+# Файл скачивается программой из репозитория раз в сутки: поправил здесь — у всех обновится без выпуска.
+
+[roblox]
+roblox.com
+rbxcdn.com
+rbx.com
+robloxlabs.com
+roblox.cn
+rbxinfra.com
+128.116.0.0/17
+209.206.40.0/21
+
+[vrchat]
+vrchat.com
+vrchat.cloud
+vrchat.net
+vrcdn.cloud
+vrcdn.live
+vrcdn.video
+exitgames.com
+photonengine.io
+photonengine.com

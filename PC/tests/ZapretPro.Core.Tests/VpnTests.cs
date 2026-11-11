@@ -277,13 +277,13 @@ public sealed class VpnTests : IDisposable
         }, time);
 
         Assert.True(await updater.RefreshIfStaleAsync(default));
-        Assert.Equal(3, calls);
+        Assert.Equal(4, calls); // два списка сайтов, подсети и наборы игр
         Assert.Contains("site599.example", File.ReadAllText(Path.Combine(_dir, "blocked-domains.txt")));
 
         // Через час — не качаем снова
         time.Now += TimeSpan.FromHours(1);
         Assert.False(await updater.RefreshIfStaleAsync(default));
-        Assert.Equal(3, calls);
+        Assert.Equal(4, calls); // два списка сайтов, подсети и наборы игр
 
         // Через сутки пришёл обрезок — старый список остаётся
         time.Now += TimeSpan.FromDays(1);
@@ -571,7 +571,7 @@ public sealed class VpnTests : IDisposable
         keys.Save(SyntheticKey.Build(SyntheticKey.Config("amnezia-awg", "amnezia-awg")));
         await vpn.ApplyAsync(NoFallback, default);
 
-        vpn.SetGameTargets([IPAddress.Parse("45.1.2.3")], ["vrchat.cloud"]);
+        vpn.SetGameTargets([IPAddress.Parse("45.1.2.3")], ["vrchat.cloud"], []);
         Assert.Contains("45.1.2.3/32", routes.Installed);
         Assert.Equal(RouteSet.Games, dns.Classify("api.vrchat.cloud"));
 
@@ -587,7 +587,7 @@ public sealed class VpnTests : IDisposable
         Assert.Contains("45.9.9.9/32", routes.Installed);
 
         // Игра закрылась
-        vpn.SetGameTargets([], []);
+        vpn.SetGameTargets([], [], []);
         await vpn.ApplyAsync(NoFallback, default);
         Assert.DoesNotContain("45.1.2.3/32", routes.Installed);
         Assert.DoesNotContain("45.9.9.9/32", routes.Installed);

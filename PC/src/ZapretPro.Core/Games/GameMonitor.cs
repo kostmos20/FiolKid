@@ -56,6 +56,10 @@ public sealed class GameMonitor : IDisposable
     private readonly Func<IReadOnlyList<GameEntry>> _games;
     private readonly Func<IReadOnlyList<ProcessPaths.Entry>> _processes;
     private readonly Func<bool> _fullScreen;
+    private volatile IReadOnlyList<string> _foundFolders = [];
+
+    /// <summary>Папки игр, которые нашёл автопоиск: игры не из стандартных папок (GOG, другой диск) — тоже игры.</summary>
+    public void SetFoundFolders(IReadOnlyList<string> folders) => _foundFolders = folders;
     private readonly object _lock = new();
     private Timer? _timer;
 
@@ -85,7 +89,7 @@ public sealed class GameMonitor : IDisposable
             before = Current;
             try
             {
-                after = Evaluate(_processes(), _games(), _fullScreen);
+                after = Evaluate(_processes(), _games(), _fullScreen, _foundFolders);
             }
             catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
             {
@@ -98,8 +102,10 @@ public sealed class GameMonitor : IDisposable
         return after;
     }
 
-    internal static GameScan Evaluate(IReadOnlyList<ProcessPaths.Entry> processes, IReadOnlyList<GameEntry> games, Func<bool> fullScreen)
+    internal static GameScan Evaluate(IReadOnlyList<ProcessPaths.Entry> processes, IReadOnlyList<GameEntry> games, Func<bool> fullScreen,
+        IReadOnlyList<string>? found = null)
     {
+        found ??= [];
         var vpn = new List<RunningGame>();
         foreach (var game in games)
         {
@@ -111,7 +117,8 @@ public sealed class GameMonitor : IDisposable
 
         // Имя для человека: игра из списка — по её имени, остальные — по exe
         var name = vpn.FirstOrDefault()?.Game.Name
-                   ?? processes.Where(p => IsGamePath(p.Path)).Select(p => Path.GetFileNameWithoutExtension(p.Path)).FirstOrDefault();
+                   ?? processes.Where(p => IsGamePath(p.Path) || found.Any(f => p.Path.StartsWith(f + "\\", StringComparison.OrdinalIgnoreCase)))
+                       .Select(p => Path.GetFileNameWithoutExtension(p.Path)).FirstOrDefault();
         if (name is not null)
             return new GameScan(name, false, vpn);
         return fullScreen() ? new GameScan("полноэкранное приложение", true, vpn) : new GameScan(null, false, vpn);

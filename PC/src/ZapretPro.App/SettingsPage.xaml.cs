@@ -209,12 +209,44 @@ public partial class SettingsPage : UserControl
             ScoreBrush(x.Score),
             x.Score?.Country)).ToList();
         var signature = string.Join("|", rows.Select(r => $"{r.Key}{r.Note}{r.Right}"));
+        ServersCount.Text = rows.Count.ToString();
         if (signature != _serversShown)
         {
             _serversShown = signature;
             ServersList.ItemsSource = rows;
         }
         ServersList.SelectedItem = auto ? null : rows.FirstOrDefault(r => r.Key == settings.ManualServerKey);
+    }
+
+    /// <summary>
+    /// Список докручен до края — колесо дальше крутит всю страницу, а не застревает в списке.
+    /// </summary>
+    private void List_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        if (sender is not DependencyObject list || FindScroller(list) is not { } inner)
+            return;
+        var atEdge = e.Delta > 0 ? inner.VerticalOffset <= 0 : inner.VerticalOffset >= inner.ScrollableHeight;
+        if (!atEdge)
+            return;
+        e.Handled = true;
+        Scroller.RaiseEvent(new System.Windows.Input.MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        {
+            RoutedEvent = MouseWheelEvent,
+            Source = sender,
+        });
+    }
+
+    private static ScrollViewer? FindScroller(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is ScrollViewer s)
+                return s;
+            if (FindScroller(child) is { } found)
+                return found;
+        }
+        return null;
     }
 
     private static string ScoreText(ServerScore? score) => score switch
@@ -242,6 +274,8 @@ public partial class SettingsPage : UserControl
         var auto = ServerAutoSwitch.IsChecked == true;
         var manual = _engine.Settings.ManualServerKey ?? _engine.Servers().FirstOrDefault(s => s.Score?.Works == true).Server?.Key;
         _engine.SetServerChoice(auto, auto ? null : manual);
+        if (!auto)
+            ServersExpander.IsExpanded = true;
         Toast?.Invoke(auto ? "Буду сам выбирать самый быстрый сервер" : "Выбери сервер в списке");
         Refresh();
     }
@@ -281,9 +315,6 @@ public partial class SettingsPage : UserControl
         ModeFirst.IsChecked = mode == StrategyModes.FirstWorking;
         ModeFastest.IsChecked = mode == StrategyModes.Fastest;
         ModeManual.IsChecked = mode == StrategyModes.Manual;
-        // В ручном режиме список нужен сразу — раскрываем его
-        if (mode == StrategyModes.Manual)
-            StrategiesExpander.IsExpanded = true;
         var status = _engine.Status;
         ModeHint.Text = mode switch
         {
@@ -337,6 +368,9 @@ public partial class SettingsPage : UserControl
             ? _engine.Settings.ManualStrategyId ?? _engine.Status.StrategyId ?? _engine.StrategyIds.FirstOrDefault()
             : null;
         _engine.SetStrategyMode(mode, manual);
+        // Выбрали «вручную» — список нужен сразу. В остальное время он свёрнут и не мешает листать
+        if (mode == StrategyModes.Manual)
+            StrategiesExpander.IsExpanded = true;
         Toast?.Invoke(mode switch
         {
             StrategyModes.Fastest => "Буду брать самый быстрый альт",

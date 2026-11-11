@@ -59,6 +59,35 @@
         <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
             <Setter Property="Margin" Value="0,0,8,0"/>
         </Style>
+        <!-- Галочка «через VPN»: квадратик слева, подпись справа -->
+        <Style x:Key="Tick" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <DockPanel Background="Transparent">
+                            <Border x:Name="Box" DockPanel.Dock="Left" Width="19" Height="19" CornerRadius="5" Margin="0,0,10,0"
+                                    Background="#FF171E28" BorderBrush="#33FFFFFF" BorderThickness="1" VerticalAlignment="Center">
+                                <Path x:Name="Mark" Data="M4 10l4 4 8-9" Stroke="#FF1B1A1E" StrokeThickness="2.2" Stretch="Uniform"
+                                      Margin="3.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="#FFE0C79F"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#FFE0C79F"/>
+                                <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#88E1BD7B"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -109,12 +138,34 @@
                         </StackPanel>
                     </DockPanel>
                     <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,12"
-                               Text="Например, VRChat (без VPN не грузятся аватары) или Roblox. Выбери .exe игры или всю её папку — тогда через VPN пойдёт и лаунчер. Дота, CS и другие игры без блокировок сюда добавлять не нужно."/>
+                               Text="Поставь галочку — игра пойдёт через VPN, сними — как обычно. Например, VRChat (без VPN не грузятся аватары) или Roblox. Дота, CS и другие игры без блокировок отмечать не нужно."/>
                     <StackPanel x:Name="GameList"/>
-                    <TextBlock x:Name="EmptyText" Text="Пока ни одной игры" FontSize="12" Foreground="{StaticResource FaintBrush}" Margin="0,4,0,4"/>
+                    <TextBlock x:Name="EmptyText" Text="Пока ни одной игры через VPN" FontSize="12" Foreground="{StaticResource FaintBrush}" Margin="0,4,0,4"/>
+                    <StackPanel x:Name="SuggestPanel" Margin="0,8,0,0">
+                        <TextBlock Text="Обычно нужен VPN:" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,8"/>
+                        <StackPanel x:Name="SuggestList"/>
+                    </StackPanel>
+                    <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Margin="0,12,0,4" Padding="0,10,0,0">
+                        <Expander x:Name="FoundExpander" Style="{StaticResource Disclosure}">
+                            <Expander.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Все найденные игры" Foreground="#FFB9BBC7" FontSize="12"/>
+                                    <Border CornerRadius="5" Background="#08FFFFFF" Padding="6,1" Margin="6,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock x:Name="FoundCount" FontSize="10" Foreground="#FFB9BBC7"/>
+                                    </Border>
+                                </StackPanel>
+                            </Expander.Header>
+                            <StackPanel Margin="0,6,0,0">
+                                <TextBlock x:Name="FoundEmpty" FontSize="12" Foreground="{StaticResource FaintBrush}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                           Text="Не нашёл ни одной игры. Добавь игру вручную кнопками ниже."/>
+                                <StackPanel x:Name="FoundList"/>
+                            </StackPanel>
+                        </Expander>
+                    </Border>
                     <WrapPanel Margin="0,12,0,0">
-                        <Button Style="{StaticResource PillButton}" Content="Добавить игру (.exe)" Margin="0,0,9,8" Click="AddExe_Click"/>
-                        <Button Style="{StaticResource SecondaryButton}" Content="Добавить папку игры" Margin="0,0,9,8" Click="AddFolder_Click"/>
+                        <Button x:Name="FindButton" Style="{StaticResource PillButton}" Content="Найти игры заново" Margin="0,0,9,8" Click="Find_Click"/>
+                        <Button Style="{StaticResource SecondaryButton}" Content="Добавить .exe" Margin="0,0,9,8" Click="AddExe_Click"/>
+                        <Button Style="{StaticResource SecondaryButton}" Content="Добавить папку" Margin="0,0,9,8" Click="AddFolder_Click"/>
                     </WrapPanel>
                     <TextBlock x:Name="VpnWarning" Style="{StaticResource Hint}" Foreground="{StaticResource AmberTextBrush}" Visibility="Collapsed"
                                Text="Для игр через VPN нужен ключ Amnezia или подписка — вставь их в «Настройках»."/>
