@@ -433,7 +433,8 @@ public sealed class VpnController : IVpn
     /// <summary>Сначала вернуть DNS Windows, потом снять туннель — чтобы ни секунды не остаться без DNS.</summary>
     private async Task StopAllAsync(CancellationToken ct)
     {
-        if (_dns is { Active: true })
+        // Не только когда Active: свой DNS мог остаться висеть после того, как сторож вернул DNS Windows
+        if (_dns is not null)
             await _dns.StopAsync();
         _matcherFor = null;
         await StopTunnelAsync(ct);

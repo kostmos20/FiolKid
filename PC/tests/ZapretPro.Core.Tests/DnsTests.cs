@@ -241,16 +241,81 @@ public sealed class DnsTests
         Assert.Contains("перебоями", logs[1]);
     }
 
+    /// <summary>Настройки адаптеров «в реестре» и netsh, который их меняет, — без настоящей Windows.</summary>
+    private sealed class FakeWindows : IAdapterDns, IDnsRestoreTask
+    {
+        public readonly Dictionary<(string Family, string Id), string[]?> Registry = [];
+        public readonly Dictionary<string, string> Names = [];
+        public readonly List<string> Commands = [];
+        /// <summary>Адаптеры, у которых netsh не срабатывает (выключен, переименован).</summary>
+        public readonly HashSet<string> NetshFails = [];
+        public bool RegistryLocked { get; set; }
+        public int TaskInstalls { get; private set; }
+        public int TaskRemoves { get; private set; }
+
+        public void Add(string id, string name, string[]? v4 = null, string[]? v6 = null)
+        {
+            Names[id] = name;
+            Registry[("ipv4", id)] = v4;
+            Registry[("ipv6", id)] = v6;
+        }
+
+        public Task<(int, string)> Netsh(string args)
+        {
+            Commands.Add(args);
+            var family = args.Split(' ')[1];
+            var name = args.Split('"')[1];
+            var id = Names.FirstOrDefault(n => n.Value == name).Key;
+            if (id is null || NetshFails.Contains(name))
+                return Task.FromResult((1, "Элемент не найден."));
+            var address = args.Split(' ').FirstOrDefault(a => a.StartsWith("address="))?["address=".Length..];
+            if (args.Contains("source=dhcp"))
+                Registry[(family, id)] = null;
+            else if (args.Contains(" set dnsservers"))
+                Registry[(family, id)] = [address!];
+            else
+                Registry[(family, id)] = [.. Registry[(family, id)] ?? [], address!];
+            return Task.FromResult((0, ""));
+        }
+
+        public bool Exists(string family, string id) => Registry.ContainsKey((family, id));
+        public string[]? Read(string family, string id) => Registry.GetValueOrDefault((family, id));
+
+        public void Write(string family, string id, string[]? servers)
+        {
+            if (RegistryLocked)
+                throw new UnauthorizedAccessException("нет доступа");
+            Registry[(family, id)] = servers is { Length: > 0 } ? servers : null;
+        }
+
+        public string? Name(string id) => Names.GetValueOrDefault(id);
+        public IReadOnlyList<(string Id, string Name)> All() => Names.Select(n => (n.Key, n.Value)).ToList();
+
+        public Task InstallAsync(string backupPath)
+        {
+            TaskInstalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveAsync()
+        {
+            TaskRemoves++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private static string NewBackupPath() =>
+        Path.Combine(Path.GetTempPath(), "OdnaKnopkaTests", Guid.NewGuid().ToString("N"), "dns.json");
+
+    private static SystemDns Sys(FakeWindows windows, string backup) => new(backup, "FiolKid", windows.Netsh, windows, windows);
+
     [Fact]
     public async Task System_dns_is_switched_and_restored_exactly()
     {
-        var backup = Path.Combine(Path.GetTempPath(), "OdnaKnopkaTests", Guid.NewGuid().ToString("N"), "dns.json");
-        var commands = new List<string>();
-        var system = new SystemDns(backup, "FiolKid", args =>
-        {
-            commands.Add(args);
-            return Task.FromResult((0, ""));
-        });
+        var windows = new FakeWindows();
+        windows.Add("{1}", "Ethernet");
+        windows.Add("{2}", "Wi-Fi", ["8.8.8.8", "8.8.4.4"]);
+        var system = Sys(windows, NewBackupPath());
         SystemDns.AdapterBackup[] adapters =
         [
             new("{1}", "Ethernet", null, null, ["192.168.100.1", "fe80::1%14"]),
@@ -260,39 +325,177 @@ public sealed class DnsTests
         var upstreams = await system.ActivateAsync(adapters);
 
         Assert.True(system.HasBackup);
+        Assert.Equal(1, windows.TaskInstalls);
         Assert.Contains("192.168.100.1:53", upstreams.Select(u => u.ToString()));
-        Assert.Contains("interface ipv4 set dnsservers name=\"Ethernet\" source=static address=127.0.0.1 register=primary validate=no", commands);
+        Assert.Contains("interface ipv4 set dnsservers name=\"Ethernet\" source=static address=127.0.0.1 register=primary validate=no", windows.Commands);
         // Второго DNS провайдера нет: Windows не должна спрашивать его мимо нас
-        Assert.DoesNotContain(commands, c => c.StartsWith("interface ipv4 add dnsservers"));
-        Assert.Contains("interface ipv6 set dnsservers name=\"Ethernet\" source=static address=::1 register=primary validate=no", commands);
+        Assert.DoesNotContain(windows.Commands, c => c.StartsWith("interface ipv4 add dnsservers"));
+        Assert.Contains("interface ipv6 set dnsservers name=\"Ethernet\" source=static address=::1 register=primary validate=no", windows.Commands);
+        Assert.Equal(["127.0.0.1"], windows.Read("ipv4", "{2}"));
 
-        commands.Clear();
-        await system.RestoreAsync();
+        windows.Commands.Clear();
+        Assert.True(await system.RestoreAsync());
 
         Assert.False(system.HasBackup);
-        Assert.Contains("interface ipv4 set dnsservers name=\"Ethernet\" source=dhcp", commands);       // было от роутера
-        Assert.Contains("interface ipv6 set dnsservers name=\"Ethernet\" source=dhcp", commands);
-        Assert.Contains("interface ipv4 set dnsservers name=\"Wi-Fi\" source=static address=8.8.8.8 register=primary validate=no", commands);
-        Assert.Contains("interface ipv4 add dnsservers name=\"Wi-Fi\" address=8.8.4.4 index=2 validate=no", commands);
+        Assert.Equal(1, windows.TaskRemoves);
+        Assert.Contains("interface ipv4 set dnsservers name=\"Ethernet\" source=dhcp", windows.Commands);       // было от роутера
+        Assert.Contains("interface ipv6 set dnsservers name=\"Ethernet\" source=dhcp", windows.Commands);
+        Assert.Contains("interface ipv4 set dnsservers name=\"Wi-Fi\" source=static address=8.8.8.8 register=primary validate=no", windows.Commands);
+        Assert.Contains("interface ipv4 add dnsservers name=\"Wi-Fi\" address=8.8.4.4 index=2 validate=no", windows.Commands);
+        Assert.Equal(["8.8.8.8", "8.8.4.4"], windows.Read("ipv4", "{2}"));
+        Assert.Null(windows.Read("ipv4", "{1}"));
     }
 
     [Fact]
     public async Task Leftover_backup_is_restored_before_switching_again()
     {
-        var backup = Path.Combine(Path.GetTempPath(), "OdnaKnopkaTests", Guid.NewGuid().ToString("N"), "dns.json");
-        var commands = new List<string>();
-        var system = new SystemDns(backup, "FiolKid", args =>
-        {
-            commands.Add(args);
-            return Task.FromResult((0, ""));
-        });
+        var windows = new FakeWindows();
+        windows.Add("{1}", "Ethernet");
+        var system = Sys(windows, NewBackupPath());
         await system.ActivateAsync([new("{1}", "Ethernet", null, null, ["192.168.100.1"])]);
-        commands.Clear();
+        windows.Commands.Clear();
 
         // Программа «упала», не вернув DNS, — следующий запуск сначала возвращает
         await system.ActivateAsync([new("{1}", "Ethernet", null, null, ["192.168.100.1"])]);
 
-        Assert.Equal("interface ipv4 set dnsservers name=\"Ethernet\" source=dhcp", commands[0]);
+        Assert.Equal("interface ipv4 set dnsservers name=\"Ethernet\" source=dhcp", windows.Commands[0]);
+    }
+
+    [Fact]
+    public async Task Adapter_is_found_by_id_after_rename()
+    {
+        var windows = new FakeWindows();
+        windows.Add("{2}", "Wi-Fi", ["8.8.8.8"]);
+        var system = Sys(windows, NewBackupPath());
+        await system.ActivateAsync([new("{2}", "Wi-Fi", ["8.8.8.8"], null, ["8.8.8.8"])]);
+
+        windows.Names["{2}"] = "Беспроводная сеть";
+        Assert.True(await system.RestoreAsync());
+
+        Assert.Equal(["8.8.8.8"], windows.Read("ipv4", "{2}"));
+        Assert.Contains("interface ipv4 set dnsservers name=\"Беспроводная сеть\" source=static address=8.8.8.8 register=primary validate=no",
+            windows.Commands);
+    }
+
+    [Fact]
+    public async Task Netsh_failure_is_fixed_through_registry()
+    {
+        var windows = new FakeWindows();
+        windows.Add("{2}", "Wi-Fi");
+        var system = Sys(windows, NewBackupPath());
+        await system.ActivateAsync([new("{2}", "Wi-Fi", null, null, ["192.168.0.1"])]);
+
+        // Адаптер выключили — netsh его не видит, но в реестр записать можно
+        windows.NetshFails.Add("Wi-Fi");
+        Assert.True(await system.RestoreAsync());
+
+        Assert.Null(windows.Read("ipv4", "{2}"));
+        Assert.Null(windows.Read("ipv6", "{2}"));
+        Assert.False(system.HasBackup);
+    }
+
+    [Fact]
+    public async Task Failed_restore_keeps_backup_and_retries()
+    {
+        var windows = new FakeWindows();
+        windows.Add("{2}", "Wi-Fi", ["1.1.1.1"]);
+        var system = Sys(windows, NewBackupPath());
+        await system.ActivateAsync([new("{2}", "Wi-Fi", ["1.1.1.1"], null, ["1.1.1.1"])]);
+
+        windows.NetshFails.Add("Wi-Fi");
+        windows.RegistryLocked = true;
+        Assert.False(await system.RestoreAsync());
+
+        // Ничего не потеряно: файл с прежними DNS на месте, задача-страховка тоже
+        Assert.True(system.HasBackup);
+        Assert.Equal(0, windows.TaskRemoves);
+        Assert.Equal(["127.0.0.1"], windows.Read("ipv4", "{2}"));
+
+        // Новое включение не затирает настоящие DNS нашими
+        windows.Add("{3}", "Ethernet");
+        // (Wi-Fi всё ещё выключен — включаемся на одном Ethernet)
+        await system.ActivateAsync([new("{3}", "Ethernet", null, null, ["192.168.100.1"])]);
+        windows.NetshFails.Clear();
+        windows.RegistryLocked = false;
+        Assert.True(await system.RestoreAsync());
+
+        Assert.Equal(["1.1.1.1"], windows.Read("ipv4", "{2}"));
+        Assert.Null(windows.Read("ipv4", "{3}"));
+        Assert.False(system.HasBackup);
+    }
+
+    [Fact]
+    public async Task Removed_adapter_does_not_block_restore()
+    {
+        var windows = new FakeWindows();
+        windows.Add("{9}", "USB Wi-Fi");
+        var system = Sys(windows, NewBackupPath());
+        await system.ActivateAsync([new("{9}", "USB Wi-Fi", null, null, ["192.168.0.1"])]);
+
+        windows.Registry.Remove(("ipv4", "{9}"));
+        windows.Registry.Remove(("ipv6", "{9}"));
+        windows.Names.Remove("{9}");
+
+        Assert.True(await system.RestoreAsync());
+        Assert.False(system.HasBackup);
+    }
+
+    [Fact]
+    public async Task Stray_loopback_dns_is_reset_only_when_nobody_answers()
+    {
+        var windows = new FakeWindows();
+        windows.Add("{2}", "Беспроводная сеть", ["127.0.0.1"]);
+        windows.Add("{3}", "Ethernet", ["8.8.8.8"]);
+        windows.Add("{4}", "FiolKid", ["127.0.0.1"]);
+        var system = Sys(windows, NewBackupPath());
+
+        // Программа здесь DNS ещё не трогала — 127.0.0.1 чужой (свой DNS-фильтр человека)
+        Assert.Equal(0, await system.ResetStrayAsync(() => false));
+        Assert.Equal(["127.0.0.1"], windows.Read("ipv4", "{2}"));
+
+        // Трогала, но файл с прежними DNS потерян (так было до 0.9.12)
+        await system.ActivateAsync([new("{3}", "Ethernet", ["8.8.8.8"], null, ["8.8.8.8"])]);
+        Assert.True(await system.RestoreAsync());
+
+        // На 127.0.0.1 кто-то отвечает — не наше дело
+        Assert.Equal(0, await system.ResetStrayAsync(() => true));
+        Assert.Equal(["127.0.0.1"], windows.Read("ipv4", "{2}"));
+
+        Assert.Equal(1, await system.ResetStrayAsync(() => false));
+        Assert.Null(windows.Read("ipv4", "{2}"));
+        Assert.Equal(["8.8.8.8"], windows.Read("ipv4", "{3}"));
+        Assert.Equal(["127.0.0.1"], windows.Read("ipv4", "{4}"));   // свой VPN-адаптер не трогаем
+    }
+
+    [Fact]
+    public async Task Loopback_probe_sees_our_dns_and_nobody()
+    {
+        int port;
+        using (var probe = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+            port = ((IPEndPoint)probe.Client.LocalEndPoint!).Port;
+        Assert.False(SystemDns.LoopbackAnswers(TimeSpan.FromMilliseconds(300), port));
+
+        // Прежний DNS молчит, а на проверку наш всё равно отвечает сам и сразу
+        using var silent = new FakeUpstream("1.2.3.4") { Silent = true };
+        await using var dns = new SmartDns([silent.EndPoint], port, [silent.EndPoint]);
+        dns.Start();
+        Assert.True(SystemDns.LoopbackAnswers(TimeSpan.FromSeconds(2), port));
+    }
+
+    [Fact]
+    public void Restore_task_is_self_contained()
+    {
+        var xml = DnsRestoreTask.BuildXml(@"C:\Users\Юля\AppData\Local\OdnaKnopka\dns-backup.json");
+        var doc = System.Xml.Linq.XDocument.Parse(xml);
+        var ns = doc.Root!.Name.Namespace;
+        Assert.Equal("S-1-5-18", doc.Descendants(ns + "UserId").Single().Value);
+        Assert.Single(doc.Descendants(ns + "BootTrigger"));
+        Assert.Equal("powershell.exe", doc.Descendants(ns + "Command").Single().Value);
+
+        var encoded = doc.Descendants(ns + "Arguments").Single().Value.Split(' ').Last();
+        var script = Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
+        Assert.Contains(@"$file = 'C:\Users\Юля\AppData\Local\OdnaKnopka\dns-backup.json'", script);
+        Assert.DoesNotContain("FiolKid.exe", script);   // папку программы могли удалить
     }
 
     [Theory]

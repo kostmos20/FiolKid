@@ -76,6 +76,20 @@ public static class DnsMessage
         return answer;
     }
 
+    /// <summary>Вопрос с одним именем, как его шлёт Windows (рекурсия запрошена).</summary>
+    public static byte[] Query(string name, ushort type, ushort id)
+    {
+        var bytes = new List<byte> { (byte)(id >> 8), (byte)id, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0 };
+        foreach (var label in name.TrimEnd('.').Split('.'))
+        {
+            bytes.Add((byte)label.Length);
+            bytes.AddRange(System.Text.Encoding.ASCII.GetBytes(label));
+        }
+        bytes.Add(0);
+        bytes.AddRange([(byte)(type >> 8), (byte)type, 0, 1]);
+        return bytes.ToArray();
+    }
+
     public static ushort Id(ReadOnlySpan<byte> message) => BinaryPrimitives.ReadUInt16BigEndian(message);
 
     /// <summary>Флаг TC: ответ обрезан, его нужно запросить по TCP.</summary>

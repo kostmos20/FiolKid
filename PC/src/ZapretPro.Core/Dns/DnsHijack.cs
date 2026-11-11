@@ -23,6 +23,12 @@ public interface IDnsHijack
     bool Unstable { get; }
 
     Task StopAsync();
+
+    /// <summary>
+    /// Свой DNS выключен, а DNS Windows вернуть до конца не вышло — попробовать ещё раз.
+    /// Зовётся по таймеру и при смене сети.
+    /// </summary>
+    Task RetryRestoreAsync();
 }
 
 /// <summary>
@@ -32,6 +38,7 @@ public interface IDnsHijack
 public sealed class DnsHijack : IDnsHijack
 {
     private readonly SystemDns _system;
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private SmartDns? _dns;
 
     public DnsHijack(string ownAdapter) : this(new SystemDns(BackupPath, ownAdapter))
@@ -48,22 +55,55 @@ public sealed class DnsHijack : IDnsHijack
 
     public event Action<string>? Log;
 
-    public bool Active => _dns is not null;
+    /// <summary>
+    /// Наш DNS работает и Windows переключена на него. Файла с прежними DNS нет, а DNS считается включённым —
+    /// значит, сторож увидел, что наш DNS не отвечает, и вернул DNS Windows сам.
+    /// </summary>
+    public bool Active => _dns is not null && _system.HasBackup;
     public string? LastError { get; private set; }
 
-    /// <summary>Программа упала, не вернув DNS, — вернуть при следующем запуске, первым делом.</summary>
-    public static async Task RecoverAsync(string ownAdapter)
+    /// <summary>
+    /// Программа упала, не вернув DNS, — вернуть при следующем запуске, первым делом. Заодно чинит DNS,
+    /// застрявший на адресе программы без файла с прежними настройками (так бывало до 0.9.12).
+    /// </summary>
+    public static async Task RecoverAsync(string ownAdapter, Action<string>? log = null)
     {
         var system = new SystemDns(BackupPath, ownAdapter);
+        if (log is not null)
+            system.Log += log;
         if (system.HasBackup)
             await system.RestoreAsync();
+        else
+            await system.ResetStrayAsync(() => SystemDns.LoopbackAnswers());
     }
 
     public async Task<bool> StartAsync(Func<string, RouteSet?> classify, Func<IReadOnlyList<IPAddress>, RouteSet, Task> onResolved,
         Func<bool> tunnelUp)
     {
-        if (_dns is not null)
+        await _gate.WaitAsync();
+        try
+        {
+            return await StartCoreAsync(classify, onResolved, tunnelUp);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<bool> StartCoreAsync(Func<string, RouteSet?> classify, Func<IReadOnlyList<IPAddress>, RouteSet, Task> onResolved,
+        Func<bool> tunnelUp)
+    {
+        if (Active)
             return true;
+        if (_dns is not null)
+        {
+            // Сторож вернул DNS Windows: наш перестал отвечать. Старый выкидываем и запускаем заново
+            Log?.Invoke("Свой DNS перестал отвечать, и DNS Windows был возвращён как был — запускаю свой DNS заново");
+            var stale = _dns;
+            _dns = null;
+            await stale.DisposeAsync();
+        }
         LastError = null;
 
         // Если остались настройки от прошлого раза — вернуть, чтобы запомнить настоящие, а не наши
@@ -120,17 +160,41 @@ public sealed class DnsHijack : IDnsHijack
 
     public async Task StopAsync()
     {
-        var dns = _dns;
-        _dns = null;
-        // Сначала вернуть DNS Windows, потом освободить порт
+        await _gate.WaitAsync();
         try
         {
-            await _system.RestoreAsync();
+            var dns = _dns;
+            _dns = null;
+            // Сначала вернуть DNS Windows, потом освободить порт. Не вернулся до конца — файл с прежними
+            // DNS остался, RetryRestoreAsync попробует ещё
+            try
+            {
+                await _system.RestoreAsync();
+            }
+            finally
+            {
+                if (dns is not null)
+                    await dns.DisposeAsync();
+            }
         }
         finally
         {
-            if (dns is not null)
-                await dns.DisposeAsync();
+            _gate.Release();
+        }
+    }
+
+    public async Task RetryRestoreAsync()
+    {
+        if (!await _gate.WaitAsync(0))
+            return;
+        try
+        {
+            if (_dns is null && _system.HasBackup)
+                await _system.RestoreAsync();
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 }

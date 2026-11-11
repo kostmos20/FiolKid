@@ -406,6 +406,8 @@ public sealed class VpnTests : IDisposable
 
         public bool Unstable => false;
 
+        public Task RetryRestoreAsync() => Task.CompletedTask;
+
         public Task StopAsync()
         {
             Active = false;

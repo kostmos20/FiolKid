@@ -34,6 +34,46 @@ internal static class DnsRecoveryGuard
         }
     }
 
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(30);
+    private const int StrikesBeforeRestore = 3;
+
+    /// <summary>
+    /// Пока программа работает и DNS Windows переключён на неё, раз в 30 секунд спрашивает наш DNS
+    /// (127.0.0.1:53). Три раза подряд не ответил — программа зависла или её DNS сломался, и у человека
+    /// не открывается ни один сайт: возвращаем DNS Windows как был, не дожидаясь, пока программу закроют.
+    /// </summary>
+    private static async Task WatchUntilExitAsync(Process owner)
+    {
+        var exit = owner.WaitForExitAsync();
+        var strikes = 0;
+        while (true)
+        {
+            await Task.WhenAny(exit, Task.Delay(CheckInterval));
+            if (exit.IsCompleted)
+                return;
+            if (!File.Exists(DnsHijack.BackupPath) || await Task.Run(() => SystemDns.LoopbackAnswers()))
+            {
+                strikes = 0;
+                continue;
+            }
+            if (++strikes < StrikesBeforeRestore)
+                continue;
+            strikes = 0;
+            try
+            {
+                var system = new SystemDns(DnsHijack.BackupPath, VpnManager.TunnelName);
+                if (await system.RestoreAsync())
+                    DnsRecoveryNote.Add("свой DNS программы перестал отвечать — вернул DNS Windows как был, чтобы не пропал интернет");
+                else
+                    DnsRecoveryNote.Add("свой DNS программы перестал отвечать, а вернуть DNS Windows до конца не вышло — попробую ещё");
+            }
+            catch (Exception e) when (e is IOException or InvalidOperationException or UnauthorizedAccessException)
+            {
+                DnsRecoveryNote.Add($"свой DNS программы перестал отвечать, а вернуть DNS Windows не вышло: {e.Message}");
+            }
+        }
+    }
+
     public static async Task RunAsync(string[] args)
     {
         if (args.Length != 3 || !int.TryParse(args[1], out var pid) || !long.TryParse(args[2], out var ticks))
@@ -47,7 +87,7 @@ internal static class DnsRecoveryGuard
                 return;
             using (var ready = EventWaitHandle.OpenExisting(ReadyName(pid)))
                 ready.Set();
-            await owner.WaitForExitAsync();
+            await WatchUntilExitAsync(owner);
         }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception
                                     or WaitHandleCannotBeOpenedException)

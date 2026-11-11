@@ -69,7 +69,7 @@ public sealed class AppEngine
         // Если программа в прошлый раз упала, не вернув DNS Windows, — вернуть первым делом
         try
         {
-            Task.Run(() => DnsHijack.RecoverAsync(VpnManager.TunnelName)).Wait(TimeSpan.FromSeconds(20));
+            Task.Run(() => DnsHijack.RecoverAsync(VpnManager.TunnelName, Write)).Wait(TimeSpan.FromSeconds(20));
         }
         catch (AggregateException e)
         {
@@ -80,6 +80,8 @@ public sealed class AppEngine
         routes.Log += Write;
         var dns = new DnsHijack(VpnManager.TunnelName);
         dns.Log += Write;
+        _dnsHijack = dns;
+        WatchDnsRestore();
         _amnezia = new AmneziaProfile(Keys, new VpnManager());
         _subscription = new SubscriptionProfile(Subscriptions, _subscriptionClient, new SingBoxTunnel(), null, _settings, new ServerBenchmark());
         _subscription.Log += Write;
@@ -101,6 +103,33 @@ public sealed class AppEngine
     }
 
     private readonly AmneziaProfile _amnezia;
+    private DnsHijack _dnsHijack = null!;
+    private Timer? _dnsRetryTimer;
+
+    /// <summary>
+    /// DNS Windows вернуть до конца не вышло (адаптер был выключен и т. п.) — пробуем снова раз в 2 минуты и
+    /// при каждой смене сети. И пишем в журнал, если сторож сам вернул DNS, потому что наш перестал отвечать.
+    /// </summary>
+    private void WatchDnsRestore()
+    {
+        _dnsRetryTimer = new Timer(_ => RetryDnsRestore(), null, TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(2));
+        System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) => RetryDnsRestore();
+    }
+
+    private void RetryDnsRestore() => _ = Task.Run(async () =>
+    {
+        try
+        {
+            var note = DnsRecoveryNote.Take();
+            if (note is not null)
+                Write(note);
+            await _dnsHijack.RetryRestoreAsync();
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            Write($"Не удалось вернуть DNS Windows: {e.Message}");
+        }
+    });
     private readonly SubscriptionProfile _subscription;
     private readonly SubscriptionClient _subscriptionClient = new();
 

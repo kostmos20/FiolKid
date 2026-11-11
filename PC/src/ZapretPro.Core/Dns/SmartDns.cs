@@ -18,6 +18,12 @@ public sealed class SmartDns : IAsyncDisposable
     public static readonly IPEndPoint[] SecureUpstreams =
         [new(IPAddress.Parse("1.1.1.1"), 53), new(IPAddress.Parse("1.0.0.1"), 53)];
 
+    /// <summary>
+    /// Имя для самопроверки «наш DNS жив»: отвечаем на него сами, сразу. Зона .invalid зарезервирована —
+    /// настоящего сайта с таким именем быть не может.
+    /// </summary>
+    public const string HealthName = "fiolkid-health.invalid";
+
     // На каждый способ (UDP, затем TCP): вместе меньше, чем Windows ждёт ответа нашего DNS
     private static readonly TimeSpan UpstreamTimeout = TimeSpan.FromSeconds(1.5);
 
@@ -94,6 +100,9 @@ public sealed class SmartDns : IAsyncDisposable
     {
         if (!DnsMessage.TryReadQuestion(query, out var name, out var type, out _))
             return await ForwardAsync(query, _normalUpstreams, ct) ?? DnsMessage.ServerFailure(query);
+
+        if (name == HealthName)
+            return DnsMessage.EmptyAnswer(query);
 
         var set = TunnelUp() ? Classify(name) : null;
         if (set is null)
@@ -334,6 +343,10 @@ public sealed class SmartDns : IAsyncDisposable
             {
                 continue; // ICMP «порт недоступен» от прошлого ответа — не повод останавливаться
             }
+            catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException)
+            {
+                return;
+            }
             var query = buffer[..received.ReceivedBytes];
             var client = received.RemoteEndPoint;
             _ = Task.Run(async () =>
@@ -355,7 +368,21 @@ public sealed class SmartDns : IAsyncDisposable
     {
         while (!_stop.IsCancellationRequested)
         {
-            var client = await listener.AcceptTcpClientAsync(_stop.Token);
+            TcpClient client;
+            try
+            {
+                client = await listener.AcceptTcpClientAsync(_stop.Token);
+            }
+            catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException)
+            {
+                return;
+            }
+            catch (SocketException)
+            {
+                // Сбой одного входящего соединения — не повод перестать отвечать по TCP
+                await Task.Delay(100);
+                continue;
+            }
             _ = Task.Run(async () =>
             {
                 using (client)
