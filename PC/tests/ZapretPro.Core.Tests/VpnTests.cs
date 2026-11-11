@@ -408,6 +408,10 @@ public sealed class VpnTests : IDisposable
 
         public Task RetryRestoreAsync() => Task.CompletedTask;
 
+        public int TunnelStops { get; private set; }
+
+        public void TunnelStopping() => TunnelStops++;
+
         public Task StopAsync()
         {
             Active = false;

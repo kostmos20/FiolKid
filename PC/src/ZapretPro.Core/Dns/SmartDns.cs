@@ -28,7 +28,8 @@ public sealed class SmartDns : IAsyncDisposable
     private static readonly TimeSpan UpstreamTimeout = TimeSpan.FromSeconds(1.5);
 
     private readonly int _port;
-    private readonly IReadOnlyList<IPEndPoint> _normalUpstreams;
+    private IReadOnlyList<IPEndPoint> _normalUpstreams;
+    private readonly HashSet<string> _healthSeen = [];
     private readonly IReadOnlyList<IPEndPoint> _secureUpstreams;
     private readonly CancellationTokenSource _stop = new();
     private readonly List<Socket> _udp = [];
@@ -50,8 +51,31 @@ public sealed class SmartDns : IAsyncDisposable
     {
         _port = port;
         // Сам себе пересылать нельзя — получилась бы петля
-        _normalUpstreams = normalUpstreams.Where(e => !(IPAddress.IsLoopback(e.Address) && e.Port == port)).ToList();
+        _normalUpstreams = WithoutSelf(normalUpstreams, port);
         _secureUpstreams = secureUpstreams ?? SecureUpstreams;
+    }
+
+    private static List<IPEndPoint> WithoutSelf(IReadOnlyList<IPEndPoint> upstreams, int port) =>
+        upstreams.Where(e => !(IPAddress.IsLoopback(e.Address) && e.Port == port)).ToList();
+
+    /// <summary>Сменилась сеть — обычные вопросы теперь пересылать DNS новой сети.</summary>
+    public void UpdateUpstreams(IReadOnlyList<IPEndPoint> normalUpstreams)
+    {
+        var list = WithoutSelf(normalUpstreams, _port);
+        if (list.Count > 0)
+            _normalUpstreams = list;
+    }
+
+    public IReadOnlyList<IPEndPoint> NormalUpstreams => _normalUpstreams;
+
+    /// <summary>
+    /// Дошёл ли до нас вопрос о проверочном имени (поддомен <see cref="HealthName"/>). Так проверяем, что
+    /// Windows действительно спрашивает наш DNS, а не только что он отвечает.
+    /// </summary>
+    public bool SawHealthCheck(string name)
+    {
+        lock (_healthSeen)
+            return _healthSeen.Contains(name.ToLowerInvariant());
     }
 
     /// <summary>Занимает порт на 127.0.0.1 и ::1. Бросает SocketException, если порт занят другой программой.</summary>
@@ -103,6 +127,16 @@ public sealed class SmartDns : IAsyncDisposable
 
         if (name == HealthName)
             return DnsMessage.EmptyAnswer(query);
+        if (name.EndsWith("." + HealthName, StringComparison.OrdinalIgnoreCase))
+        {
+            lock (_healthSeen)
+            {
+                if (_healthSeen.Count > 100)
+                    _healthSeen.Clear();
+                _healthSeen.Add(name.ToLowerInvariant());
+            }
+            return DnsMessage.EmptyAnswer(query);
+        }
 
         var set = TunnelUp() ? Classify(name) : null;
         if (set is null)

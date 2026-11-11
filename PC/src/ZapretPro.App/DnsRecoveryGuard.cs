@@ -51,7 +51,8 @@ internal static class DnsRecoveryGuard
             await Task.WhenAny(exit, Task.Delay(CheckInterval));
             if (exit.IsCompleted)
                 return;
-            if (!File.Exists(DnsHijack.BackupPath) || await Task.Run(() => SystemDns.LoopbackAnswers()))
+            var system = new SystemDns(DnsHijack.BackupPath, VpnManager.TunnelName);
+            if (!system.HasBackup && !system.HasTunnelMark || await Task.Run(() => SystemDns.LoopbackAnswers()))
             {
                 strikes = 0;
                 continue;
@@ -61,7 +62,15 @@ internal static class DnsRecoveryGuard
             strikes = 0;
             try
             {
-                var system = new SystemDns(DnsHijack.BackupPath, VpnManager.TunnelName);
+                if (system.HasTunnelMark)
+                {
+                    // Основной способ: снять фильтры зависшей программы и убрать наш DNS с адаптера VPN
+                    WfpDnsGuard.RemoveLeftovers();
+                    if (await system.ClearTunnelAsync())
+                        DnsRecoveryNote.Add("свой DNS программы перестал отвечать — снял блокировку DNS и убрал его с адаптера VPN, чтобы не пропал интернет");
+                }
+                if (!system.HasBackup)
+                    continue;
                 if (await system.RestoreAsync())
                     DnsRecoveryNote.Add("свой DNS программы перестал отвечать — вернул DNS Windows как был, чтобы не пропал интернет");
                 else

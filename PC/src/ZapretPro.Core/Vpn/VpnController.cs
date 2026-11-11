@@ -446,6 +446,8 @@ public sealed class VpnController : IVpn
         if (_runningConf is null || _active is null)
             return;
         Log?.Invoke($"Отключаю VPN: {_active.Name}");
+        // Без адаптера VPN наш DNS недоступен Windows — блокировку DNS провайдера снять заранее
+        _dns?.TunnelStopping();
         await _active.Tunnel.StopAsync(ct);
         _runningConf = null;
         _routes.Reset();

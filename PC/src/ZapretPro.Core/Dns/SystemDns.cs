@@ -24,10 +24,12 @@ public sealed class SystemDns
     private readonly Func<string, Task<(int Code, string Output)>> _netsh;
     private readonly IAdapterDns _adapters;
     private readonly IDnsRestoreTask _restoreTask;
+    private readonly Func<IReadOnlyList<AdapterBackup>>? _capture;
 
     public SystemDns(string backupPath, string ownAdapter, Func<string, Task<(int Code, string Output)>>? netsh = null,
-        IAdapterDns? adapters = null, IDnsRestoreTask? restoreTask = null)
+        IAdapterDns? adapters = null, IDnsRestoreTask? restoreTask = null, Func<IReadOnlyList<AdapterBackup>>? capture = null)
     {
+        _capture = capture;
         _backupPath = backupPath;
         _ownAdapter = ownAdapter;
         _netsh = netsh ?? RunNetshAsync;
@@ -190,6 +192,76 @@ public sealed class SystemDns
         return fixedNames.Count;
     }
 
+    /// <summary>Отметка «DNS адаптера VPN переключён на программу»: в ней ID адаптера, чтобы вернуть даже без него.</summary>
+    public string TunnelMarkPath => Path.Combine(Path.GetDirectoryName(_backupPath)!, "dns-tunnel.txt");
+
+    public bool HasTunnelMark => File.Exists(TunnelMarkPath);
+
+    /// <summary>Адаптер VPN сейчас есть в системе.</summary>
+    public bool TunnelPresent => _adapters.IdOf(_ownAdapter) is not null;
+
+    /// <summary>Адаптер VPN есть и DNS у него — наш.</summary>
+    public bool TunnelReady => _adapters.IdOf(_ownAdapter) is { } id && IsExactlyOurs("ipv4", _adapters.Read("ipv4", id));
+
+    /// <summary>
+    /// Ставит наш DNS только на адаптер VPN — физические адаптеры не трогаем. Адаптер VPN исчезает вместе
+    /// с VPN, так что застрять 127.0.0.1 негде. Метрику адаптера ставим самую маленькую: Windows сначала
+    /// спрашивает DNS адаптера с меньшей метрикой. Маршруты от этого не меняются — у адаптера VPN только
+    /// узкие маршруты сайтов из списков. False — не вышло (адаптера нет, Windows отказала).
+    /// </summary>
+    public async Task<bool> ActivateTunnelAsync()
+    {
+        var id = _adapters.IdOf(_ownAdapter);
+        if (id is null)
+            return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(TunnelMarkPath)!);
+        File.WriteAllText(TunnelMarkPath, id);
+
+        await NetshAsync($"interface ipv4 set dnsservers name=\"{_ownAdapter}\" source=static address=127.0.0.1 register=none validate=no",
+            quietOnError: true);
+        await NetshAsync($"interface ipv6 set dnsservers name=\"{_ownAdapter}\" source=static address=::1 register=none validate=no",
+            quietOnError: true);
+        await NetshAsync($"interface ipv4 set interface interface=\"{_ownAdapter}\" metric=1", quietOnError: true);
+        await NetshAsync($"interface ipv6 set interface interface=\"{_ownAdapter}\" metric=1", quietOnError: true);
+        if (!IsExactlyOurs("ipv4", _adapters.Read("ipv4", id)))
+            return false;
+        FlushCache();
+        return true;
+    }
+
+    /// <summary>
+    /// Убирает наш DNS с адаптера VPN (по ID из отметки — даже если адаптера сейчас нет: Windows помнит
+    /// его настройки и вернула бы их при следующем включении VPN). True — убран или убирать нечего.
+    /// </summary>
+    public async Task<bool> ClearTunnelAsync()
+    {
+        if (!HasTunnelMark)
+            return true;
+        string id;
+        try
+        {
+            id = File.ReadAllText(TunnelMarkPath).Trim();
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        var ok = true;
+        if (id.Length > 0)
+        {
+            var name = _adapters.Name(id) ?? _ownAdapter;
+            foreach (var family in Families)
+            {
+                if (IsOurs(_adapters.Read(family, id)))
+                    ok &= await SetFamilyAsync(family, id, name, null);
+            }
+        }
+        FlushCache();
+        if (ok)
+            File.Delete(TunnelMarkPath);
+        return ok;
+    }
+
     private static readonly string[] Families = ["ipv4", "ipv6"];
 
     private static bool IsOurs(string[]? servers) =>
@@ -258,7 +330,9 @@ public sealed class SystemDns
     /// Windows рассылает вопрос параллельно на DNS всех адаптеров и берёт самый быстрый ответ, поэтому
     /// переключать нужно все, у кого DNS есть, — иначе ответ провайдера мог бы обогнать наш.
     /// </summary>
-    public IReadOnlyList<AdapterBackup> Capture() => NetworkInterface.GetAllNetworkInterfaces()
+    public IReadOnlyList<AdapterBackup> Capture() => _capture?.Invoke() ?? CaptureWindows();
+
+    private List<AdapterBackup> CaptureWindows() => NetworkInterface.GetAllNetworkInterfaces()
         .Where(n => n.OperationalStatus == OperationalStatus.Up
                     && n.NetworkInterfaceType is not (NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
                     && !n.Name.Equals(_ownAdapter, StringComparison.OrdinalIgnoreCase))
@@ -377,6 +451,9 @@ public interface IAdapterDns
 
     /// <summary>Все адаптеры, которые видит Windows, включая отключённые.</summary>
     IReadOnlyList<(string Id, string Name)> All();
+
+    /// <summary>ID адаптера с таким именем (любого типа, в том числе VPN) или null.</summary>
+    string? IdOf(string name);
 }
 
 /// <summary>Настройки DNS адаптеров в реестре Windows (NameServer в Tcpip и Tcpip6).</summary>
@@ -409,6 +486,9 @@ public sealed class WindowsAdapterDns : IAdapterDns
 
     public string? Name(string id) => NetworkInterface.GetAllNetworkInterfaces()
         .FirstOrDefault(n => n.Id.Equals(id, StringComparison.OrdinalIgnoreCase))?.Name;
+
+    public string? IdOf(string name) => NetworkInterface.GetAllNetworkInterfaces()
+        .FirstOrDefault(n => n.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Id;
 
     public IReadOnlyList<(string Id, string Name)> All() => NetworkInterface.GetAllNetworkInterfaces()
         .Where(n => n.NetworkInterfaceType is not (NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel))

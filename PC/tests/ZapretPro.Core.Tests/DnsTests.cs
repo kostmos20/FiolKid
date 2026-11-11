@@ -263,6 +263,8 @@ public sealed class DnsTests
         public Task<(int, string)> Netsh(string args)
         {
             Commands.Add(args);
+            if (!args.Contains(" dnsservers "))
+                return Task.FromResult(Names.ContainsValue(args.Split('"')[1]) ? (0, "") : (1, "Элемент не найден."));
             var family = args.Split(' ')[1];
             var name = args.Split('"')[1];
             var id = Names.FirstOrDefault(n => n.Value == name).Key;
@@ -290,6 +292,7 @@ public sealed class DnsTests
 
         public string? Name(string id) => Names.GetValueOrDefault(id);
         public IReadOnlyList<(string Id, string Name)> All() => Names.Select(n => (n.Key, n.Value)).ToList();
+        public string? IdOf(string name) => Names.FirstOrDefault(n => n.Value == name).Key;
 
         public Task InstallAsync(string backupPath)
         {
