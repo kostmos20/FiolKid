@@ -264,6 +264,44 @@ public sealed class VpnTests : IDisposable
     }
 
     [Fact]
+    public void Own_sites_stay_in_vpn_after_list_update_and_are_not_cut_by_zapret_lists()
+    {
+        var builtIn = Path.Combine(_dir, "builtin");
+        var updated = Path.Combine(_dir, "updated");
+        Directory.CreateDirectory(builtIn);
+        Directory.CreateDirectory(updated);
+        File.WriteAllText(Path.Combine(builtIn, "ai-domains.txt"), "chatgpt.com");
+        File.WriteAllText(Path.Combine(builtIn, "blocked-domains.txt"), "old.example");
+        File.WriteAllText(Path.Combine(builtIn, RouteLists.OwnFile), "# наши сайты\nsklad.example.org\n5.6.7.0/24");
+        File.WriteAllText(Path.Combine(updated, "blocked-domains.txt"), "new.example");
+        // Свежая копия «нашего» списка в папке обновлений игнорируется
+        File.WriteAllText(Path.Combine(updated, RouteLists.OwnFile), "evil.example");
+        // Даже если хостлист zapret накроет домен — наш сайт всё равно через VPN
+        var zapret = Path.Combine(_dir, "list-general.txt");
+        File.WriteAllText(zapret, "example.org");
+
+        var lists = RouteLists.Load(builtIn, updated, [zapret]);
+        var blocked = lists.Domains[RouteSet.Blocked];
+
+        Assert.Contains("sklad.example.org", blocked);
+        Assert.Contains("new.example", blocked);
+        Assert.DoesNotContain("evil.example", blocked);
+        Assert.Contains(IPNetwork.Parse("5.6.7.0/24"), lists.Networks[RouteSet.Blocked]);
+        Assert.Equal(RouteSet.Blocked, new DomainMatcher(blocked.Select(d => (d, RouteSet.Blocked))).Match("app.sklad.example.org"));
+    }
+
+    [Fact]
+    public void Bundled_own_list_has_the_warehouse_site()
+    {
+        var lists = RouteLists.Load(Path.Combine(AppContext.BaseDirectory, "data", "vpn"));
+        var matcher = new DomainMatcher(lists.Domains[RouteSet.Blocked].Select(d => (d, RouteSet.Blocked)));
+
+        Assert.Equal(RouteSet.Blocked, matcher.Match("app.skladkomforta.dpdns.org"));
+        Assert.Equal(RouteSet.Blocked, matcher.Match("skladkomforta.dpdns.org"));
+        Assert.Null(matcher.Match("other.dpdns.org"));
+    }
+
+    [Fact]
     public async Task ListUpdater_downloads_once_a_day_and_rejects_garbage()
     {
         var time = new FakeTime();

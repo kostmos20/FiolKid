@@ -24,6 +24,12 @@ public sealed class RouteLists
     /// <summary>Списки, которые программа сама обновляет из интернета (см. <see cref="ListUpdater"/>).</summary>
     public static readonly string[] UpdatableFiles = ["blocked-domains.txt", "blocked-cidr.txt"];
 
+    /// <summary>
+    /// Наши сайты — всегда через VPN. Берётся только из встроенной папки: ListUpdater его не скачивает,
+    /// и хостлисты zapret его не отрезают.
+    /// </summary>
+    public const string OwnFile = "own-domains.txt";
+
     public required IReadOnlyDictionary<RouteSet, IReadOnlyList<string>> Domains { get; init; }
     public required IReadOnlyDictionary<RouteSet, IReadOnlyList<IPNetwork>> Networks { get; init; }
 
@@ -63,13 +69,16 @@ public sealed class RouteLists
             .Select(d => d.TrimStart('^').ToLowerInvariant())
             .ToHashSet();
 
+        var (ownHosts, ownNets) = Parse(ReadLines(Path.Combine(dir, OwnFile)));
         domains[RouteSet.Blocked] = domains[RouteSet.Blocked]
             // Строки вида «.ua» — целые доменные зоны, по IP их не выразить
             .Where(d => !d.StartsWith('.') && d.Contains('.') && !IsUnder(d, own))
+            .Concat(ownHosts.Where(d => !d.StartsWith('.') && d.Contains('.')))
             // Сайты часто живут на www.: без него открылась бы только переадресация
             .SelectMany(d => d.StartsWith("www.") ? [d] : new[] { d, "www." + d })
             .Distinct()
             .ToList();
+        networks[RouteSet.Blocked] = networks[RouteSet.Blocked].Concat(ownNets).Distinct().ToList();
 
         return new RouteLists { Domains = domains, Networks = networks };
     }
