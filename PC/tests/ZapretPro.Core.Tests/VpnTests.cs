@@ -291,14 +291,13 @@ public sealed class VpnTests : IDisposable
     }
 
     [Fact]
-    public void Bundled_own_list_has_the_warehouse_site()
+    public void Warehouse_site_on_a_russian_server_goes_direct()
     {
+        Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "data", "vpn", RouteLists.OwnFile)));
         var lists = RouteLists.Load(Path.Combine(AppContext.BaseDirectory, "data", "vpn"));
         var matcher = new DomainMatcher(lists.Domains[RouteSet.Blocked].Select(d => (d, RouteSet.Blocked)));
 
-        Assert.Equal(RouteSet.Blocked, matcher.Match("app.skladkomforta.dpdns.org"));
-        Assert.Equal(RouteSet.Blocked, matcher.Match("skladkomforta.dpdns.org"));
-        Assert.Null(matcher.Match("other.dpdns.org"));
+        Assert.Null(matcher.Match("app.skladkomforta.dpdns.org"));
     }
 
     [Fact]
