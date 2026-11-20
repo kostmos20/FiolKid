@@ -43,7 +43,12 @@ public sealed record HealthReport(IReadOnlyDictionary<Service, bool> Services, b
 
 public interface IHealthProbe
 {
-    Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct);
+    /// <param name="direct">
+    /// Какие сервисы проверять напрямую — мимо туннеля VPN и нашего DNS (так проверяется работа zapret).
+    /// Остальные — как браузер: через наш DNS и, если сервис в списках, через туннель.
+    /// Контрольный сайт «есть ли интернет» проверяется всегда напрямую.
+    /// </param>
+    Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, IReadOnlySet<Service> direct, CancellationToken ct);
 }
 
 /// <summary>
@@ -57,6 +62,7 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(7);
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
+    private const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 
     private static readonly Dictionary<Service, string[]> Targets = new()
     {
@@ -91,9 +97,9 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
 
     public static bool IsAiCountryOk(string? country) => country is not null && !AiBlockedCountries.Contains(country);
 
-    public async Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
+    public async Task<HealthReport> CheckAsync(IReadOnlyCollection<Service> services, IReadOnlySet<Service> direct, CancellationToken ct)
     {
-        var report = await CheckOnceAsync(services, ct);
+        var report = await CheckOnceAsync(services, direct, ct);
         if (services.Contains(Service.Telegram))
             report = report with { TelegramClients = FindTelegramClients(), TelegramAppRunning = Zapret.TelegramClients.DesktopRunning() };
 
@@ -102,7 +108,7 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
             return report;
 
         await Task.Delay(RetryDelay, ct);
-        var retry = await CheckOnceAsync(failed, ct);
+        var retry = await CheckOnceAsync(failed, direct, ct);
         var merged = report.Services.ToDictionary(kv => kv.Key, kv => kv.Value || retry[kv.Key]);
         var problems = report.Problems
             .Where(p => !merged[p.Key])
@@ -116,7 +122,7 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
         };
     }
 
-    private async Task<HealthReport> CheckOnceAsync(IReadOnlyCollection<Service> services, CancellationToken ct)
+    private async Task<HealthReport> CheckOnceAsync(IReadOnlyCollection<Service> services, IReadOnlySet<Service> direct, CancellationToken ct)
     {
         using var handler = new SocketsHttpHandler
         {
@@ -126,10 +132,12 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
             PooledConnectionLifetime = TimeSpan.Zero,
         };
         using var http = new HttpClient(handler) { Timeout = Timeout };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+        using var directHttp = new HttpClient(DirectNet.Handler(Timeout)) { Timeout = Timeout };
+        directHttp.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
 
-        var control = OpenAsync(http, ControlUrl, ct);
-        var checks = services.ToDictionary(s => s, s => CheckServiceAsync(http, s, ct));
+        var control = OpenAsync(directHttp, ControlUrl, ct);
+        var checks = services.ToDictionary(s => s, s => CheckServiceAsync(direct.Contains(s) ? directHttp : http, s, ct));
 
         await Task.WhenAll(checks.Values.Cast<Task>().Append(control));
         var problems = checks

@@ -569,6 +569,71 @@ public sealed class SubscriptionTests : IDisposable
         Assert.True(amnezia.Tunnel.Running);
     }
 
+    private sealed class FakeSubscription : IVpnProfile, IRemeasurable
+    {
+        public string Id => "subscription";
+        public string Name => "подписка «Quattro VPN»";
+        public bool Configured => true;
+        public FakeTunnel Tunnel { get; } = new();
+        IVpnTunnel IVpnProfile.Tunnel => Tunnel;
+        public string? Error => null;
+        public string Conf { get; set; } = "conf-old";
+        public int Remeasures { get; private set; }
+        /// <summary>Что покажет замер: есть живые серверы — конфиг меняется на них и туннель оживает.</summary>
+        public bool AliveServers { get; set; } = true;
+
+        public Task<TunnelPlan?> PrepareAsync(CancellationToken ct) =>
+            Task.FromResult<TunnelPlan?>(new TunnelPlan(Conf, ["198.51.100.1"]));
+
+        public Task<bool> RemeasureAsync(CancellationToken ct)
+        {
+            Remeasures++;
+            if (AliveServers)
+            {
+                Conf = $"conf-new{Remeasures}";
+                Tunnel.Dead = false;
+            }
+            return Task.FromResult(AliveServers);
+        }
+    }
+
+    [Fact]
+    public async Task Dead_subscription_servers_are_remeasured_at_once_and_replaced_with_live_ones()
+    {
+        var sub = new FakeSubscription();
+        var time = new FakeTime();
+        var lists = new RouteLists
+        {
+            Domains = Enum.GetValues<RouteSet>().ToDictionary(s => s, _ => (IReadOnlyList<string>)[]),
+            Networks = Enum.GetValues<RouteSet>().ToDictionary(s => s, _ => (IReadOnlyList<System.Net.IPNetwork>)[]),
+        };
+        var vpn = new VpnController([sub], () => new Router(lists, (_, _) => Task.FromResult(Array.Empty<System.Net.IPAddress>()), time),
+            new FakeRoutes(), dns: null, new SettingsStore(Path.Combine(_dir, "settings.json")), time, handshakeWait: TimeSpan.Zero,
+            otherVpns: () => []);
+        Assert.Equal(VpnState.Connected, (await vpn.ApplyAsync(NoFallback, default)).State);
+
+        // Серверы из вчерашнего замера умерли: не ждём суток — замер сразу и переподключение к живым
+        sub.Tunnel.Dead = true;
+        time.Now += TimeSpan.FromMinutes(2);
+        var status = await vpn.ApplyAsync(NoFallback, default);
+        Assert.Equal(VpnState.Connected, status.State);
+        Assert.Equal(1, sub.Remeasures);
+        Assert.Equal(2, sub.Tunnel.Starts);
+
+        // Снова умерли через 5 минут — замер не чаще раза в 15 минут
+        sub.Tunnel.Dead = true;
+        time.Now += TimeSpan.FromMinutes(5);
+        Assert.Equal(VpnState.ServerNotResponding, (await vpn.ApplyAsync(NoFallback, default)).State);
+        Assert.Equal(1, sub.Remeasures);
+
+        // Прошло 15 минут, но замер не нашёл живых — остаёмся, не переподключаемся впустую
+        sub.AliveServers = false;
+        time.Now += TimeSpan.FromMinutes(15);
+        Assert.Equal(VpnState.ServerNotResponding, (await vpn.ApplyAsync(NoFallback, default)).State);
+        Assert.Equal(2, sub.Remeasures);
+        Assert.Equal(2, sub.Tunnel.Starts);
+    }
+
     private static string? FindUp(params string[] relative)
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)

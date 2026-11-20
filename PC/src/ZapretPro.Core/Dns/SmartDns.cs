@@ -320,8 +320,8 @@ public sealed class SmartDns : IAsyncDisposable
             if (_secureFailures.Count >= UnstableAfter && now - _lastUnstableLog >= LogQuietPeriod)
             {
                 _lastUnstableLog = now;
-                message = "VPN-сервер отвечает с перебоями: запросы через туннель часто теряются. Чаще всего так бывает, " +
-                          "когда этот же ключ включён ещё на одном устройстве — на каждое устройство нужен свой ключ.";
+                message = "VPN-сервер отвечает с перебоями: запросы через туннель часто теряются. С ключом Amnezia так чаще всего бывает, " +
+                          "когда этот же ключ включён ещё на одном устройстве; с подпиской программа сама замерит серверы и перейдёт на живые.";
             }
             else if (now - _lastFailureLog >= LogQuietPeriod)
             {
@@ -365,7 +365,7 @@ public sealed class SmartDns : IAsyncDisposable
     /// Спрашивает все вышестоящие DNS сразу и берёт первый пригодный ответ; null — не ответил никто.
     /// Каждый сервер — сначала по UDP, при молчании по TCP: в туннеле UDP иногда теряется, а TCP проходит.
     /// </summary>
-    private static async Task<byte[]?> ForwardAsync(byte[] query, IReadOnlyList<IPEndPoint> upstreams, CancellationToken ct)
+    internal static async Task<byte[]?> ForwardAsync(byte[] query, IReadOnlyList<IPEndPoint> upstreams, CancellationToken ct)
     {
         if (upstreams.Count == 0)
             return null;

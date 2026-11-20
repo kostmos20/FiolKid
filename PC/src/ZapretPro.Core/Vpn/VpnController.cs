@@ -67,6 +67,8 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
     // должен быть быстрее, чтобы на него перейти
     private static readonly TimeSpan CompareInterval = TimeSpan.FromDays(1);
     private const double SwitchIfFasterBy = 0.3;
+    // Серверы подписки молчат или работают с перебоями — замеряем их заново не чаще этого
+    private static readonly TimeSpan RemeasureCooldown = TimeSpan.FromMinutes(15);
 
     private static readonly RouteSet[] MatchOrder = [RouteSet.Ai, RouteSet.Blocked, RouteSet.Telegram, RouteSet.Discord, RouteSet.YouTube];
 
@@ -98,6 +100,7 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
     private DateTimeOffset? _lastCompare;
     private HashSet<RouteSet>? _matcherFor;
     private DateTimeOffset _dnsRetryAt;
+    private DateTimeOffset _remeasuredAt = DateTimeOffset.MinValue;
 
     // Игровой режим: держимся за выбранный сервер; переключиться можно один раз за игру
     private bool _holdSwitched;
@@ -224,7 +227,7 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
 
     /// <summary>Поднять туннель через этот способ (если ещё не поднят), маршруты, DNS. Ok = работает или ещё подключается.</summary>
     private async Task<(VpnStatus Status, bool Ok)> TryProfileAsync(IVpnProfile profile, HashSet<RouteSet> sets,
-        IReadOnlySet<RouteSet> fallback, CancellationToken ct)
+        IReadOnlySet<RouteSet> fallback, CancellationToken ct, bool mayReplace = true)
     {
         var plan = await profile.PrepareAsync(ct);
         if (plan is null)
@@ -284,12 +287,26 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
         if (health == TunnelHealth.Connected)
         {
             _cooldown.Remove(profile);
+            // Работает, но с перебоями: может, другие серверы подписки сейчас лучше — переходим, только если выбор поменялся
+            if (mayReplace && Unstable && await RemeasureAsync(profile, "работают с перебоями", ct)
+                && await profile.PrepareAsync(ct) is { } better && better.Conf != _runningConf)
+            {
+                _runningConf = null;
+                return await TryProfileAsync(profile, sets, fallback, ct, mayReplace: false);
+            }
             return (new VpnStatus(VpnState.Connected, count, fallback, null) { SmartDns = smart, Profile = profile.Name }, true);
         }
         if (_time.GetUtcNow() - _startedAt < ConnectingGrace)
             return (new VpnStatus(VpnState.Connecting, count, fallback, null) { SmartDns = smart, Profile = profile.Name }, true);
 
         Log?.Invoke($"VPN: {profile.Tunnel.LastError}");
+        // Серверы подписки умерли, а прошлый замер ещё «свежий» — не ждём суток: замеряем заново и
+        // переподключаемся к живым
+        if (mayReplace && await RemeasureAsync(profile, "не отвечают", ct))
+        {
+            _runningConf = null;
+            return await TryProfileAsync(profile, sets, fallback, ct, mayReplace: false);
+        }
         var others = _otherVpns();
         var message = others.Count > 0 ? Explain(profile.Tunnel.LastError)
             : profile is AmneziaProfile ? SilentServerMessage
@@ -595,6 +612,25 @@ public sealed class VpnController : IVpn, Games.IGameRoutes
         _matcherFor = null;
         await StopTunnelAsync(ct);
         _active = null;
+    }
+
+    /// <summary>
+    /// Заново замерить серверы подписки (не во время игры и не чаще раза в 15 минут). True — нашлись рабочие,
+    /// можно переподключаться.
+    /// </summary>
+    private async Task<bool> RemeasureAsync(IVpnProfile profile, string why, CancellationToken ct)
+    {
+        if (profile is not IRemeasurable remeasurable || Hold())
+            return false;
+        var now = _time.GetUtcNow();
+        if (now - _remeasuredAt < RemeasureCooldown)
+            return false;
+        _remeasuredAt = now;
+        Log?.Invoke($"VPN: серверы {profile.Name} {why} — заново замеряю серверы и перехожу на живые");
+        if (await remeasurable.RemeasureAsync(ct))
+            return true;
+        Log?.Invoke("VPN: при замере не ответил ни один сервер подписки — остаюсь на прежних");
+        return false;
     }
 
     private async Task StopTunnelAsync(CancellationToken ct)

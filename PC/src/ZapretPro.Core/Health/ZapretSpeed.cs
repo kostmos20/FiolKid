@@ -70,15 +70,10 @@ public static class ZapretSpeed
 
     private static async Task<double?> FetchAsync(string url, TimeSpan timeout, bool download, CancellationToken ct)
     {
-        // Каждый раз новое соединение: иначе второй замер шёл бы по уже открытому
-        using var handler = new SocketsHttpHandler
-        {
-            UseProxy = false,
-            AllowAutoRedirect = false,
-            PooledConnectionLifetime = TimeSpan.Zero,
-            ConnectTimeout = timeout,
-            AutomaticDecompression = DecompressionMethods.All,
-        };
+        // Каждый раз новое соединение: иначе второй замер шёл бы по уже открытому.
+        // Напрямую, мимо туннеля и нашего DNS: меряем zapret, а не VPN
+        using var handler = DirectNet.Handler(timeout);
+        handler.AutomaticDecompression = DecompressionMethods.All;
         using var http = new HttpClient(handler) { Timeout = timeout };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
         var sw = Stopwatch.StartNew();

@@ -27,6 +27,13 @@ public interface IVpnProfile
     Task<TunnelPlan?> PrepareAsync(CancellationToken ct);
 }
 
+/// <summary>Способ, у которого много серверов (подписка): можно заново замерить их и перейти на живые.</summary>
+public interface IRemeasurable
+{
+    /// <summary>Замерить серверы заново, не глядя на возраст прошлого замера. True — нашёлся хоть один рабочий.</summary>
+    Task<bool> RemeasureAsync(CancellationToken ct);
+}
+
 /// <summary>Ключ vpn:// от Amnezia → AmneziaWG (amneziawg.exe).</summary>
 public sealed class AmneziaProfile : IVpnProfile
 {
@@ -78,7 +85,7 @@ public sealed class AmneziaProfile : IVpnProfile
 }
 
 /// <summary>Ссылка-подписка (VLESS, Hysteria2 и т. п.) → sing-box. Список серверов обновляется сам.</summary>
-public sealed class SubscriptionProfile : IVpnProfile
+public sealed class SubscriptionProfile : IVpnProfile, IRemeasurable
 {
     private readonly SubscriptionStore _store;
     private readonly SubscriptionClient _client;
@@ -216,6 +223,9 @@ public sealed class SubscriptionProfile : IVpnProfile
         // обновлении списка и VPN зря переподключался бы
         return SingBoxConfig.Select(servers, random: new Random(StableHash(source)));
     }
+
+    public async Task<bool> RemeasureAsync(CancellationToken ct) =>
+        (await MeasureNowAsync(ct))?.Any(s => s.Works) == true;
 
     /// <summary>Кнопка «Замерить серверы»: заново по сохранённому списку подписки.</summary>
     public async Task<IReadOnlyList<ServerScore>?> MeasureNowAsync(CancellationToken ct)

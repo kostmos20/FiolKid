@@ -58,11 +58,17 @@ public sealed record WatchdogOptions
     public int Finalists { get; init; } = 3;
     /// <summary>«Быстрый» при отсеве: все четыре адреса вместе ответили не дольше этого.</summary>
     public double FastScreenMilliseconds { get; init; } = 2000;
+    /// <summary>Паузы между попытками поднять неработающий VPN: каждая следующая длиннее, последняя повторяется.</summary>
+    public IReadOnlyList<TimeSpan> VpnRetryDelays { get; init; } =
+        [TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5)];
 }
 
 /// <summary>
-/// Следит за zapret, прокси Telegram и VPN: периодически проверяет сервисы, перезапускает
-/// упавшее, перебирает стратегии (docs/PLAN.md, раздел «Zapret») и включает запасной режим через VPN.
+/// Следит за тремя независимыми частями: zapret (YouTube и Discord), прокси Telegram и VPN. У каждой свой
+/// цикл проверок, свой замок и своё состояние — зависание или поломка одной не держит остальные:
+/// перебор альтов не ждёт подключения VPN, а мёртвый VPN не мешает zapret и Telegram.
+/// Друг другу части только сообщают: zapret — «YouTube не тяну, возьми в туннель», Telegram — «возьми меня
+/// в туннель»; VPN применяет это, когда может, никого не дожидаясь (docs/PLAN.md, раздел «Zapret»).
 /// </summary>
 public sealed class Watchdog
 {
@@ -77,26 +83,53 @@ public sealed class Watchdog
     private readonly SettingsStore _settings;
     private readonly WatchdogOptions _options;
     private readonly TimeProvider _time;
-    private readonly SemaphoreSlim _gate = new(1, 1);
 
+    // Свой замок у каждой части: перебор альтов (минута и дольше) не держит ни VPN, ни Telegram
+    private readonly SemaphoreSlim _zapretGate = new(1, 1);
+    private readonly SemaphoreSlim _telegramGate = new(1, 1);
+    private readonly SemaphoreSlim _vpnGate = new(1, 1);
+    // Общее для частей: запасные наборы, отчёты, состояние VPN
+    private readonly object _sync = new();
+
+    private volatile bool _running;
+    private CancellationTokenSource _life = new();
+
+    // ---- zapret ----
     private ZapretState _state = ZapretState.Stopped;
     private int _current = -1;
     private int _failures;
     private DateTimeOffset _lastSearch;
-    private HealthReport? _lastReport;
-    private string _lastProblems = "";
     private string? _lastError;
     private bool _needsReboot;
     private bool _measuring;
     /// <summary>Перебор нужен, но отложен (рано или компьютер занят): сломавшееся пока через запасной канал.</summary>
     private bool _deferred;
     private string? _lastDeferReason;
-
-    // Запасной режим: какие сервисы zapret сейчас отдал VPN, и с какого момента Telegram идёт через VPN
+    /// <summary>Какие сервисы zapret сейчас отдал VPN.</summary>
     private readonly HashSet<Service> _zapretFallback = [];
+    /// <summary>Открывается ли контрольный сайт напрямую — по последней проверке zapret.</summary>
+    private bool _internetOk = true;
+
+    // ---- Telegram ----
     private DateTimeOffset? _telegramFallbackSince;
     private int _telegramFailures;
+    private string? _telegramNote;
+
+    // ---- VPN ----
     private VpnStatus _vpnStatus = VpnStatus.Initial;
+    private int _vpnFailures;
+    private DateTimeOffset _vpnRetryAt = DateTimeOffset.MinValue;
+    private HashSet<RouteSet>? _appliedSets;
+    // Просьбы частей поменять наборы VPN разбирает одна фоновая задача: просьба не ждёт подключения
+    private bool _vpnDirty;
+    private bool _vpnDraining;
+    private Task _vpnDrain = Task.CompletedTask;
+
+    // ---- отчёты частей: из них складывается общий для окна ----
+    private HealthReport? _zapretReport;
+    private HealthReport? _telegramReport;
+    private HealthReport? _vpnReport;
+    private readonly Dictionary<string, string> _loggedProblems = new();
 
     public Watchdog(IZapretRunner zapret, ITelegramProxy telegram, IVpn vpn, IHealthProbe probe, SettingsStore settings,
         WatchdogOptions? options = null, TimeProvider? time = null, IZapretSpeedProbe? speed = null,
@@ -118,48 +151,171 @@ public sealed class Watchdog
     /// <summary>Технические сообщения для отчёта и тестового окна.</summary>
     public event Action<string>? Log;
 
-    public WatchdogStatus Status => new(
-        _state,
-        _current >= 0 ? _zapret.Strategies[_current].Id : null,
-        _current + 1,
-        SafeCount(),
-        _lastReport,
-        _telegram.IsRunning,
-        ViaVpn(),
-        _vpnStatus,
-        _lastError) { NeedsReboot = _needsReboot, Measuring = _measuring };
-
-    /// <summary>Запуск и бесконечный цикл проверок до отмены.</summary>
-    public async Task RunAsync(CancellationToken ct)
+    public WatchdogStatus Status
     {
-        await StartAsync(ct);
-        while (!ct.IsCancellationRequested)
+        get
         {
-            await Task.Delay(_options.CheckInterval, _time, ct);
-            await CheckAsync(ct);
+            lock (_sync)
+            {
+                return new WatchdogStatus(
+                    _state,
+                    _current >= 0 ? _zapret.Strategies[_current].Id : null,
+                    _current + 1,
+                    SafeCount(),
+                    MergedReport(),
+                    _telegram.IsRunning,
+                    ViaVpn(),
+                    _vpnStatus,
+                    _lastError) { NeedsReboot = _needsReboot, Measuring = _measuring };
+            }
         }
     }
 
-    /// <summary>Запуск: прокси Telegram, VPN для нейросетей и последняя рабочая стратегия, если она ещё помогает.</summary>
+    // ===================================================================== запуск и остановка
+
+    /// <summary>
+    /// Запуск и три независимых цикла проверок до отмены: zapret, Telegram, VPN. Упавший или зависший цикл
+    /// одной части не останавливает и не тормозит остальные.
+    /// </summary>
+    public async Task RunAsync(CancellationToken ct)
+    {
+        Begin(ct);
+        await Task.WhenAll(
+            LoopAsync("zapret", StartZapretAsync, c => CheckZapretAsync(c, manual: false), ct),
+            LoopAsync("Telegram", StartTelegramAsync, CheckTelegramAsync, ct),
+            VpnLoopAsync(ct));
+    }
+
+    /// <summary>
+    /// Запуск всех частей сразу, параллельно: прокси Telegram, VPN и последняя рабочая стратегия.
+    /// Возвращается, когда каждая часть сделала первый шаг (для тестов и ручного вызова).
+    /// </summary>
     public async Task StartAsync(CancellationToken ct)
     {
-        await _gate.WaitAsync(ct);
+        Begin(ct);
+        await Task.WhenAll(Guard("Telegram", StartTelegramAsync, ct), Guard("VPN", RefreshVpnAsync, ct), Guard("zapret", StartZapretAsync, ct));
+        await VpnSettledAsync();
+    }
+
+    /// <summary>
+    /// Одна проверка всех частей сразу. Можно вызвать и вне расписания: <paramref name="manual"/> — человек нажал
+    /// «Проверить сейчас», ему перебор разрешён без пауз и даже во время игры.
+    /// </summary>
+    public async Task CheckAsync(CancellationToken ct, bool manual = false)
+    {
+        if (!_running)
+            return;
+        await Task.WhenAll(Guard("Telegram", CheckTelegramAsync, ct), Guard("VPN", RefreshVpnAsync, ct),
+            Guard("zapret", c => CheckZapretAsync(c, manual), ct));
+        await VpnSettledAsync();
+    }
+
+    /// <summary>
+    /// Останавливает winws, прокси Telegram и VPN. Сначала отмени токен <see cref="RunAsync"/> и дождись его,
+    /// иначе идущий перебор успеет запустить всё заново.
+    /// </summary>
+    public async Task StopAsync(CancellationToken ct)
+    {
+        _running = false;
+        _life.Cancel();
+        await VpnSettledAsync();
+
+        // Драйвер WinDivert не выгружаем: принудительная остановка могла оставить его «застрявшим»,
+        // и до перезагрузки zapret не запускался (FWP_E_IN_USE). Он выгрузится сам при перезагрузке.
+        _zapret.Stop();
+        _telegram.Stop();
+        await _vpn.StopAsync(ct);
+        lock (_sync)
+        {
+            _vpnStatus = _vpn.Status;
+            _current = -1;
+            _zapretFallback.Clear();
+            _telegramFallbackSince = null;
+            _telegramFailures = 0;
+            _telegramNote = null;
+            _deferred = false;
+            _lastDeferReason = null;
+            _appliedSets = null;
+            _vpnFailures = 0;
+            _vpnRetryAt = DateTimeOffset.MinValue;
+            _vpnDirty = false;
+            _zapretReport = _telegramReport = _vpnReport = null;
+            _internetOk = true;
+        }
+        SetState(ZapretState.Stopped);
+    }
+
+    private void Begin(CancellationToken ct)
+    {
+        _life.Dispose();
+        _life = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _running = true;
+    }
+
+    private async Task LoopAsync(string part, Func<CancellationToken, Task> start, Func<CancellationToken, Task> check, CancellationToken ct)
+    {
+        await Guard(part, start, ct);
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(_options.CheckInterval, _time, ct);
+            await Guard(part, check, ct);
+        }
+    }
+
+    private async Task VpnLoopAsync(CancellationToken ct)
+    {
+        await Guard("VPN", RefreshVpnAsync, ct);
+        while (!ct.IsCancellationRequested)
+        {
+            // VPN не работает — следующая попытка по нарастающей паузе, а не через обычные 2,5 минуты
+            var wait = _options.CheckInterval;
+            DateTimeOffset retryAt;
+            lock (_sync)
+                retryAt = _vpnRetryAt;
+            var untilRetry = retryAt - _time.GetUtcNow();
+            if (untilRetry > TimeSpan.Zero && untilRetry < wait)
+                wait = untilRetry;
+            await Task.Delay(wait, _time, ct);
+            await Guard("VPN", RefreshVpnAsync, ct);
+        }
+    }
+
+    /// <summary>Ошибка одной части пишется в журнал и не роняет остальные.</summary>
+    private async Task Guard(string part, Func<CancellationToken, Task> action, CancellationToken ct)
+    {
         try
         {
-            await EnsureTelegramAsync(ct);
-            await ApplyVpnAsync(ct);
+            await action(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            Write($"{part}: ошибка — {e.Message}");
+        }
+    }
+
+    // ===================================================================== zapret
+
+    private async Task StartZapretAsync(CancellationToken ct)
+    {
+        await _zapretGate.WaitAsync(ct);
+        try
+        {
             await StartStrategyAsync(ct);
         }
         finally
         {
-            _gate.Release();
+            _zapretGate.Release();
         }
     }
 
     /// <summary>Сменили режим выбора альта в настройках — применить сразу.</summary>
     public async Task ApplyStrategySettingsAsync(CancellationToken ct)
     {
-        await _gate.WaitAsync(ct);
+        await _zapretGate.WaitAsync(ct);
         try
         {
             if (_state != ZapretState.Stopped)
@@ -167,14 +323,14 @@ public sealed class Watchdog
         }
         finally
         {
-            _gate.Release();
+            _zapretGate.Release();
         }
     }
 
     /// <summary>Кнопка «Замерить сейчас»: все альты по скорости, затем самый быстрый.</summary>
     public async Task BenchmarkAsync(CancellationToken ct)
     {
-        await _gate.WaitAsync(ct);
+        await _zapretGate.WaitAsync(ct);
         try
         {
             if (_state != ZapretState.Stopped && _speed is not null)
@@ -182,7 +338,7 @@ public sealed class Watchdog
         }
         finally
         {
-            _gate.Release();
+            _zapretGate.Release();
         }
     }
 
@@ -245,11 +401,9 @@ public sealed class Watchdog
         StrategyScore? best;
         try
         {
-            if (_zapretFallback.Count > 0)
-            {
-                _zapretFallback.Clear();
-                await ApplyVpnAsync(ct);
-            }
+            // Замер идёт напрямую, мимо туннеля, — запасной канал ему не мешает; снимаем его, потому что
+            // сейчас выберем альт заново
+            ClearZapretFallback();
 
             Write($"Подбираю самый быстрый альт ({strategies.Count} шт.)");
             var started = _time.GetUtcNow();
@@ -398,27 +552,26 @@ public sealed class Watchdog
     {
         _deferred = true;
         _failures = 0;
-        var added = toVpn.Where(_zapretFallback.Add).ToList();
+        List<Service> added;
+        lock (_sync)
+            added = toVpn.Where(_zapretFallback.Add).ToList();
         if (added.Count > 0 || reason != _lastDeferReason)
             Write($"Альт не меняю: {reason}" +
                   (added.Count > 0 ? $". Пока через запасной канал: {string.Join(", ", added)}" : ""));
         _lastDeferReason = reason;
         SetState(_zapret.IsRunning ? ZapretState.Partial : ZapretState.Failed);
+        if (added.Count > 0)
+            RequestVpn();
     }
 
-    /// <summary>
-    /// Одна плановая проверка. Можно вызвать и вне расписания: <paramref name="manual"/> — человек нажал
-    /// «Проверить сейчас», ему перебор разрешён без пауз и даже во время игры.
-    /// </summary>
-    public async Task CheckAsync(CancellationToken ct, bool manual = false)
+    /// <summary>Плановая проверка zapret. VPN и Telegram она не касается и их не ждёт.</summary>
+    private async Task CheckZapretAsync(CancellationToken ct, bool manual)
     {
-        await _gate.WaitAsync(ct);
+        await _zapretGate.WaitAsync(ct);
         try
         {
             if (_state == ZapretState.Stopped)
                 return;
-
-            await EnsureTelegramAsync(ct);
 
             // Отложенный перебор — как только станет можно; обычный запасной режим — раз в час
             var retryAfter = _deferred ? _options.MinSwitchInterval : _options.RetryInterval;
@@ -454,7 +607,6 @@ public sealed class Watchdog
                     if (!manual && SwitchBlocked() is { } reason)
                     {
                         Defer(reason, ZapretServices);
-                        await ApplyVpnAsync(ct);
                         return;
                     }
                     await RecoverStrategyAsync(ct);
@@ -462,7 +614,7 @@ public sealed class Watchdog
                 }
             }
 
-            var report = await ProbeAsync(ct);
+            var report = await ProbeZapretAsync(ct);
             if (!report.InternetOk)
             {
                 if (_state != ZapretState.Failed)
@@ -471,75 +623,47 @@ public sealed class Watchdog
                 return;
             }
 
-            UpdateTelegramFallback(report);
+            if (_state == ZapretState.Failed)
+                return;
 
-            if (_state != ZapretState.Failed)
+            // Сервисы, отданные VPN, проверка zapret не касается: они открываются через туннель
+            var active = ActiveZapretServices();
+            if (active.All(s => report[s]))
             {
-                // Сервисы, отданные VPN, проверка zapret не касается: они открываются через туннель
-                var active = ZapretServices.Except(_zapretFallback).ToList();
-                if (active.All(s => report[s]))
-                {
-                    _failures = 0;
-                    var state = _zapretFallback.Count == 0 ? ZapretState.Working : ZapretState.Partial;
-                    if (state == ZapretState.Working && _state != ZapretState.Working)
-                        Remember(_current);
-                    SetState(state);
-                }
-                else
-                {
-                    _failures++;
-                    Write($"Проверка не прошла ({_failures} из {_options.FailuresBeforeSwitch})");
-                    if (_failures >= _options.FailuresBeforeSwitch)
-                    {
-                        if (!manual && SwitchBlocked() is { } reason)
-                        {
-                            // Не перебираем, а отдаём сломавшееся VPN: winws и остальное работают как работали
-                            Defer(reason, active.Where(s => !report[s]));
-                        }
-                        else
-                        {
-                            await RecoverStrategyAsync(ct);
-                            return;
-                        }
-                    }
-                    else
-                        Notify();
-                }
+                _failures = 0;
+                var state = active.Count == ZapretServices.Length ? ZapretState.Working : ZapretState.Partial;
+                if (state == ZapretState.Working && _state != ZapretState.Working)
+                    Remember(_current);
+                SetState(state);
+                return;
             }
 
-            await ApplyVpnAsync(ct);
+            _failures++;
+            Write($"Проверка не прошла ({_failures} из {_options.FailuresBeforeSwitch})");
+            if (_failures < _options.FailuresBeforeSwitch)
+            {
+                Notify();
+                return;
+            }
+            if (!manual && SwitchBlocked() is { } blockedReason)
+            {
+                // Не перебираем, а отдаём сломавшееся VPN: winws и остальное работают как работали
+                Defer(blockedReason, active.Where(s => !report[s]));
+                return;
+            }
+            await RecoverStrategyAsync(ct);
         }
         finally
         {
-            _gate.Release();
+            _zapretGate.Release();
         }
-    }
-
-    /// <summary>
-    /// Останавливает winws, прокси Telegram и VPN. Сначала отмени токен <see cref="RunAsync"/> и дождись его,
-    /// иначе идущий перебор успеет запустить всё заново.
-    /// </summary>
-    public async Task StopAsync(CancellationToken ct)
-    {
-        // Драйвер WinDivert не выгружаем: принудительная остановка могла оставить его «застрявшим»,
-        // и до перезагрузки zapret не запускался (FWP_E_IN_USE). Он выгрузится сам при перезагрузке.
-        _zapret.Stop();
-        _telegram.Stop();
-        await _vpn.StopAsync(ct);
-        _vpnStatus = _vpn.Status;
-        _current = -1;
-        _zapretFallback.Clear();
-        _telegramFallbackSince = null;
-        _telegramFailures = 0;
-        _deferred = false;
-        _lastDeferReason = null;
-        SetState(ZapretState.Stopped);
     }
 
     /// <summary>
     /// Перебирает все стратегии по кругу, начиная с <paramref name="start"/>.
     /// Первая, при которой открылось всё, становится рабочей. Если такой нет — берём лучшую из
     /// частично рабочих, а остальное отдаём VPN; если не помогла ни одна — YouTube и Discord идут через VPN.
+    /// Проверки идут напрямую, мимо туннеля, поэтому перебор не ждёт VPN и не путает его с рабочим альтом.
     /// </summary>
     /// <param name="only">Проверить только альт <paramref name="start"/> (выбран вручную): не помог — недостающее через VPN.</param>
     private async Task SearchAsync(int start, CancellationToken ct, bool only = false)
@@ -549,13 +673,7 @@ public sealed class Watchdog
         _lastSearch = _time.GetUtcNow();
         _deferred = false;
         SetState(ZapretState.Searching);
-
-        // Пока ищем, YouTube и Discord должны идти мимо VPN — иначе проверка покажет успех туннеля, а не zapret
-        if (_zapretFallback.Count > 0)
-        {
-            _zapretFallback.Clear();
-            await ApplyVpnAsync(ct);
-        }
+        ClearZapretFallback();
 
         var best = (Ok: 0, Index: -1, Missing: (IReadOnlyList<Service>)ZapretServices);
         var startErrors = 0;
@@ -583,7 +701,7 @@ public sealed class Watchdog
             }
 
             await Task.Delay(_options.WarmUp, _time, ct);
-            var report = await ProbeAsync(ct);
+            var report = await ProbeZapretAsync(ct);
 
             if (!report.InternetOk)
             {
@@ -602,7 +720,6 @@ public sealed class Watchdog
                 _needsReboot = false;
                 Remember(index);
                 SetState(ZapretState.Working);
-                await ApplyVpnAsync(ct);
                 return;
             }
 
@@ -618,7 +735,8 @@ public sealed class Watchdog
         if (best.Index >= 0 && (best.Index == _current && _zapret.IsRunning || await _zapret.StartAsync(strategies[best.Index], ct)))
         {
             _current = best.Index;
-            _zapretFallback.UnionWith(best.Missing);
+            lock (_sync)
+                _zapretFallback.UnionWith(best.Missing);
             Write($"Полностью не помогла ни одна стратегия, оставляю «{strategies[best.Index].Id}», " +
                   $"через запасной канал: {string.Join(", ", best.Missing)}");
             SetState(ZapretState.Partial);
@@ -627,7 +745,8 @@ public sealed class Watchdog
         {
             _zapret.Stop();
             _current = -1;
-            _zapretFallback.UnionWith(ZapretServices);
+            lock (_sync)
+                _zapretFallback.UnionWith(ZapretServices);
             if (driverBroken)
                 _lastError = _zapret.LastError;
             else if (startErrors == count)
@@ -635,108 +754,163 @@ public sealed class Watchdog
             Write("Ни одна стратегия не помогла — YouTube и Discord через запасной канал");
             SetState(ZapretState.Failed);
         }
+        RequestVpn();
+    }
 
-        await ApplyVpnAsync(ct);
-        if (_vpn.HasKey)
-            await ProbeAsync(ct);
+    private void ClearZapretFallback()
+    {
+        bool changed;
+        lock (_sync)
+        {
+            changed = _zapretFallback.Count > 0;
+            _zapretFallback.Clear();
+        }
+        if (changed)
+            RequestVpn();
+    }
+
+    private List<Service> ActiveZapretServices()
+    {
+        lock (_sync)
+            return ZapretServices.Except(_zapretFallback).ToList();
+    }
+
+    /// <summary>Проверка zapret: контрольный сайт и сервисы, которые он сейчас тянет, — напрямую.</summary>
+    private async Task<HealthReport> ProbeZapretAsync(CancellationToken ct)
+    {
+        var services = ActiveZapretServices();
+        var report = await _probe.CheckAsync(services, services.ToHashSet(), ct);
+        lock (_sync)
+        {
+            _zapretReport = report;
+            _internetOk = report.InternetOk;
+        }
+        LogProblems("zapret", report);
+        Notify();
+        return report;
+    }
+
+    // ===================================================================== Telegram
+
+    private async Task StartTelegramAsync(CancellationToken ct)
+    {
+        await _telegramGate.WaitAsync(ct);
+        try
+        {
+            await EnsureTelegramAsync(ct);
+            await ProbeTelegramAsync(ct);
+        }
+        finally
+        {
+            _telegramGate.Release();
+        }
+    }
+
+    private async Task CheckTelegramAsync(CancellationToken ct)
+    {
+        await _telegramGate.WaitAsync(ct);
+        try
+        {
+            if (!_running)
+                return;
+            await EnsureTelegramAsync(ct);
+            var report = await ProbeTelegramAsync(ct);
+            UpdateTelegramFallback(report);
+        }
+        finally
+        {
+            _telegramGate.Release();
+        }
+    }
+
+    /// <summary>Кнопка «Перезапустить прокси»: остановить и запустить заново, затем проверить. Перебор альтов не ждёт.</summary>
+    public async Task RestartTelegramAsync(CancellationToken ct)
+    {
+        await _telegramGate.WaitAsync(ct);
+        try
+        {
+            if (!_running)
+                return;
+            Write("Перезапускаю прокси Telegram по просьбе");
+            _telegram.Stop();
+            bool hadFallback;
+            lock (_sync)
+            {
+                hadFallback = _telegramFallbackSince is not null;
+                _telegramFallbackSince = null;
+                _telegramFailures = 0;
+            }
+            if (hadFallback)
+                RequestVpn();
+            await EnsureTelegramAsync(ct);
+            await ProbeTelegramAsync(ct);
+        }
+        finally
+        {
+            _telegramGate.Release();
+        }
+    }
+
+    private async Task<HealthReport> ProbeTelegramAsync(CancellationToken ct)
+    {
+        var report = await _probe.CheckAsync([Service.Telegram], new HashSet<Service>(), ct);
+        lock (_sync)
+            _telegramReport = report;
+        LogProblems("Telegram", report);
+        Notify();
+        return report;
     }
 
     /// <summary>
-    /// Telegram через VPN, если прокси работает, но до серверов Telegram не достучаться два раза подряд.
-    /// Через час пробуем снова без VPN.
+    /// Telegram через VPN, если прокси работает, но до серверов Telegram не достучаться два раза подряд — и только
+    /// пока VPN жив: в мёртвый туннель Telegram ушёл бы «в никуда». Через час пробуем снова без VPN.
     /// </summary>
     private void UpdateTelegramFallback(HealthReport report)
     {
         if (!_telegram.IsRunning)
             return;
 
+        bool changed;
+        string? message;
+        lock (_sync)
+            (changed, message) = UpdateTelegramFallbackLocked(report);
+        if (message is not null)
+            Write(message);
+        if (changed)
+            RequestVpn();
+    }
+
+    private (bool Changed, string? Message) UpdateTelegramFallbackLocked(HealthReport report)
+    {
         if (_telegramFallbackSince is { } since)
         {
-            if (_time.GetUtcNow() - since >= _options.RetryInterval)
-            {
-                Write("Прошёл час — пробую Telegram без запасного канала");
-                _telegramFallbackSince = null;
-                _telegramFailures = 0;
-            }
-            return;
-        }
-
-        if (report[Service.Telegram])
-        {
-            _telegramFailures = 0;
-            return;
-        }
-
-        if (++_telegramFailures >= _options.FailuresBeforeSwitch)
-        {
-            Write("Telegram не работает через прокси — включаю запасной канал");
-            _telegramFallbackSince = _time.GetUtcNow();
-        }
-    }
-
-    private async Task ApplyVpnAsync(CancellationToken ct)
-    {
-        var sets = new HashSet<RouteSet>();
-        if (_zapretFallback.Contains(Service.YouTube))
-            sets.Add(RouteSet.YouTube);
-        if (_zapretFallback.Contains(Service.Discord))
-            sets.Add(RouteSet.Discord);
-        if (_telegramFallbackSince is not null)
-            sets.Add(RouteSet.Telegram);
-
-        try
-        {
-            _vpnStatus = await _vpn.ApplyAsync(sets, ct);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException
-                                  or System.ComponentModel.Win32Exception)
-        {
-            _vpnStatus = new VpnStatus(VpnState.Failed, 0, sets, e.Message);
-        }
-
-        if (_vpnStatus.Error is { } error && _vpnStatus.State != VpnState.NoKey)
-            Write($"VPN: {error}");
-        Notify();
-    }
-
-    private async Task<HealthReport> ProbeAsync(CancellationToken ct)
-    {
-        var services = new List<Service>(ZapretServices) { Service.Telegram };
-        if (_vpn.HasKey)
-            services.Add(Service.Ai);
-        _lastReport = await _probe.CheckAsync(services, ct);
-
-        // Причины провалов пишем в журнал только когда они меняются, чтобы не засорять его каждые 2,5 минуты
-        var problems = string.Join("; ", _lastReport.Problems.OrderBy(p => p.Key).Select(p => $"{p.Key}: {p.Value}"));
-        if (problems != _lastProblems)
-        {
-            Write(problems.Length > 0 ? $"Не прошло: {problems}" : "Все проверки прошли");
-            _lastProblems = problems;
-        }
-
-        Notify();
-        return _lastReport;
-    }
-
-    /// <summary>Кнопка «Перезапустить прокси»: остановить и запустить заново, затем проверить.</summary>
-    public async Task RestartTelegramAsync(CancellationToken ct)
-    {
-        await _gate.WaitAsync(ct);
-        try
-        {
-            if (_state == ZapretState.Stopped)
-                return;
-            Write("Перезапускаю прокси Telegram по просьбе");
-            _telegram.Stop();
+            if (_time.GetUtcNow() - since < _options.RetryInterval)
+                return (false, null);
             _telegramFallbackSince = null;
             _telegramFailures = 0;
-            await EnsureTelegramAsync(ct);
-            await ProbeAsync(ct);
+            return (true, "Прошёл час — пробую Telegram без запасного канала");
         }
-        finally
+
+        // Нет интернета вообще — это не поломка прокси
+        if (report[Service.Telegram] || !_internetOk)
         {
-            _gate.Release();
+            _telegramFailures = 0;
+            _telegramNote = null;
+            return (false, null);
         }
+
+        if (++_telegramFailures < _options.FailuresBeforeSwitch)
+            return (false, null);
+        if (!VpnAlive(_vpnStatus))
+        {
+            const string note = "Telegram не работает через прокси, а запасной канал (VPN) сейчас не работает — жду VPN";
+            var first = _telegramNote != note;
+            _telegramNote = note;
+            return (false, first ? note : null);
+        }
+        _telegramNote = null;
+        _telegramFallbackSince = _time.GetUtcNow();
+        return (true, "Telegram не работает через прокси — включаю запасной канал");
     }
 
     private async Task EnsureTelegramAsync(CancellationToken ct)
@@ -752,6 +926,274 @@ public sealed class Watchdog
         }
         Notify();
     }
+
+    // ===================================================================== VPN
+
+    private static bool VpnAlive(VpnStatus status) => status.State is VpnState.Connected or VpnState.Connecting;
+
+    private static bool VpnBroken(VpnStatus status) => status.State is VpnState.Failed or VpnState.ServerNotResponding or VpnState.BadKey;
+
+    private HashSet<RouteSet> DesiredSets()
+    {
+        lock (_sync)
+        {
+            var sets = new HashSet<RouteSet>();
+            if (_zapretFallback.Contains(Service.YouTube))
+                sets.Add(RouteSet.YouTube);
+            if (_zapretFallback.Contains(Service.Discord))
+                sets.Add(RouteSet.Discord);
+            if (_telegramFallbackSince is not null)
+                sets.Add(RouteSet.Telegram);
+            return sets;
+        }
+    }
+
+    /// <summary>
+    /// Плановая проверка VPN: поднять (если лежит — по нарастающей паузе), привести наборы к нужным,
+    /// проверить нейросети и то, что сейчас идёт через туннель.
+    /// </summary>
+    private async Task RefreshVpnAsync(CancellationToken ct)
+    {
+        await _vpnGate.WaitAsync(ct);
+        try
+        {
+            if (!_running)
+                return;
+            DateTimeOffset retryAt;
+            lock (_sync)
+            {
+                retryAt = _vpnRetryAt;
+                _vpnDirty = false;
+            }
+            if (_time.GetUtcNow() < retryAt)
+                return; // ещё рано переподключать мёртвый VPN
+            await ApplyVpnAsync(DesiredSets(), ct);
+            await ProbeVpnAsync(ct);
+        }
+        finally
+        {
+            _vpnGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Просьба части поменять наборы VPN: «возьми YouTube», «отдай Telegram». Не ждёт: применяет фоновая
+    /// задача, когда VPN свободен. Несколько просьб подряд сливаются в одно применение.
+    /// </summary>
+    private void RequestVpn()
+    {
+        if (!_running)
+            return;
+        lock (_sync)
+        {
+            _vpnDirty = true;
+            if (_vpnDraining)
+                return;
+            _vpnDraining = true;
+            var ct = _life.Token;
+            _vpnDrain = Task.Run(() => DrainVpnAsync(ct));
+        }
+    }
+
+    private async Task DrainVpnAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _vpnGate.WaitAsync(ct);
+            try
+            {
+                while (true)
+                {
+                    HashSet<RouteSet> sets;
+                    lock (_sync)
+                    {
+                        if (!_vpnDirty || !_running)
+                        {
+                            _vpnDraining = false;
+                            return;
+                        }
+                        _vpnDirty = false;
+                        sets = DesiredSets();
+                        // Туннель не поднялся — менять в нём нечего; нужные наборы применит следующая попытка
+                        if (_vpnStatus.State == VpnState.Failed && _time.GetUtcNow() < _vpnRetryAt
+                            || _appliedSets is not null && _appliedSets.SetEquals(sets) && !VpnBroken(_vpnStatus))
+                            continue;
+                    }
+                    await ApplyVpnAsync(sets, ct);
+                    await ProbeVpnAsync(ct);
+                }
+            }
+            finally
+            {
+                _vpnGate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception e)
+        {
+            Write($"VPN: ошибка — {e.Message}");
+        }
+        finally
+        {
+            lock (_sync)
+                _vpnDraining = false;
+        }
+    }
+
+    /// <summary>Дождаться, пока фоновая задача применит все просьбы (для тестов, кнопок и остановки).</summary>
+    private async Task VpnSettledAsync()
+    {
+        Task drain;
+        lock (_sync)
+            drain = _vpnDrain;
+        try
+        {
+            await drain;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task ApplyVpnAsync(HashSet<RouteSet> sets, CancellationToken ct)
+    {
+        VpnStatus status;
+        try
+        {
+            status = await _vpn.ApplyAsync(sets, ct);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException
+                                  or System.ComponentModel.Win32Exception)
+        {
+            status = new VpnStatus(VpnState.Failed, 0, sets, e.Message);
+        }
+
+        var droppedTelegram = false;
+        string? retryNote = null;
+        lock (_sync)
+        {
+            _vpnStatus = status;
+            _appliedSets = sets;
+            if (VpnBroken(status))
+            {
+                var delays = _options.VpnRetryDelays;
+                var delay = delays.Count == 0 ? TimeSpan.Zero : delays[Math.Min(_vpnFailures, delays.Count - 1)];
+                _vpnFailures++;
+                _vpnRetryAt = _time.GetUtcNow() + delay;
+                if (delay > TimeSpan.Zero)
+                    retryNote = $"VPN: следующая попытка через {Describe(delay)}";
+                // Запасной канал Telegram — только в живой VPN
+                if (_telegramFallbackSince is not null)
+                {
+                    _telegramFallbackSince = null;
+                    _telegramFailures = 0;
+                    droppedTelegram = true;
+                }
+            }
+            else
+            {
+                _vpnFailures = 0;
+                _vpnRetryAt = DateTimeOffset.MinValue;
+            }
+        }
+
+        if (status.Error is { } error && status.State != VpnState.NoKey)
+            Write($"VPN: {error}");
+        if (retryNote is not null)
+            Write(retryNote);
+        if (droppedTelegram)
+        {
+            Write("VPN не работает — Telegram снова через прокси, без запасного канала");
+            RequestVpn();
+        }
+        Notify();
+    }
+
+    private static string Describe(TimeSpan delay) =>
+        delay.TotalMinutes >= 1 ? $"{delay.TotalMinutes:0} мин" : $"{delay.TotalSeconds:0} с";
+
+    /// <summary>Нейросети и то, что zapret отдал в туннель, — проверяем так, как откроет браузер.</summary>
+    private async Task ProbeVpnAsync(CancellationToken ct)
+    {
+        if (!_vpn.HasKey)
+        {
+            lock (_sync)
+                _vpnReport = null;
+            Notify();
+            return;
+        }
+        List<Service> services;
+        lock (_sync)
+            services = [Service.Ai, .. ZapretServices.Where(_zapretFallback.Contains)];
+        var report = await _probe.CheckAsync(services, new HashSet<Service>(), ct);
+        lock (_sync)
+            _vpnReport = report;
+        LogProblems("VPN", report);
+        Notify();
+    }
+
+    // ===================================================================== общий отчёт
+
+    /// <summary>
+    /// Общий отчёт для окна: YouTube и Discord — от zapret, а если их взял VPN — от VPN; Telegram — свой;
+    /// нейросети — от VPN. «Есть ли интернет» — по проверке напрямую.
+    /// </summary>
+    private HealthReport? MergedReport()
+    {
+        if (_zapretReport is null && _telegramReport is null && _vpnReport is null)
+            return null;
+        var services = new Dictionary<Service, bool>();
+        var problems = new Dictionary<Service, string>();
+
+        void Take(HealthReport? from, IEnumerable<Service> which)
+        {
+            if (from is null)
+                return;
+            foreach (var s in which)
+            {
+                if (!from.Services.TryGetValue(s, out var ok))
+                    continue;
+                services[s] = ok;
+                if (from.Problems.TryGetValue(s, out var p))
+                    problems[s] = p;
+                else
+                    problems.Remove(s);
+            }
+        }
+
+        Take(_zapretReport, ZapretServices.Except(_zapretFallback));
+        Take(_vpnReport, [Service.Ai, .. ZapretServices.Where(_zapretFallback.Contains)]);
+        Take(_telegramReport, [Service.Telegram]);
+
+        return new HealthReport(services, _zapretReport?.InternetOk ?? _internetOk)
+        {
+            AiCountry = _vpnReport?.AiCountry,
+            AiExitIp = _vpnReport?.AiExitIp,
+            TelegramClients = _telegramReport?.TelegramClients,
+            TelegramAppRunning = _telegramReport?.TelegramAppRunning ?? false,
+            Problems = problems,
+        };
+    }
+
+    /// <summary>Причины провалов пишем в журнал только когда они меняются, чтобы не засорять его каждые 2,5 минуты.</summary>
+    private void LogProblems(string part, HealthReport report)
+    {
+        var problems = string.Join("; ", report.Problems.OrderBy(p => p.Key).Select(p => $"{p.Key}: {p.Value}"));
+        lock (_sync)
+        {
+            if (_loggedProblems.TryGetValue(part, out var last) ? last == problems : problems.Length == 0)
+            {
+                _loggedProblems[part] = problems;
+                return;
+            }
+            _loggedProblems[part] = problems;
+        }
+        Write(problems.Length > 0 ? $"Не прошло: {problems}" : $"{part}: все проверки прошли");
+    }
+
+    // ===================================================================== прочее
 
     private IReadOnlySet<Service> ViaVpn()
     {
