@@ -21,9 +21,21 @@ public sealed class DirectNetTests
     }
 
     [Fact]
+    public async Task Last_good_answer_is_used_when_dns_gives_nothing_this_time()
+    {
+        var host = $"flaky-{Guid.NewGuid():N}.example";
+        IReadOnlyList<IPAddress> answer = [IPAddress.Parse("142.250.2.2")];
+        Assert.Equal(answer, await DirectNet.ResolveAsync(host, [], default, (_, _) => Task.FromResult(answer)));
+
+        // Провайдер в этот раз адреса не отдал — берём прошлый, а не «альт не работает»
+        var again = await DirectNet.ResolveAsync(host, [], default, (_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([]));
+        Assert.Equal(answer, again);
+    }
+
+    [Fact]
     public async Task Stub_addresses_count_as_not_found()
     {
-        var addresses = await DirectNet.ResolveAsync("www.youtube.com", [], default,
+        var addresses = await DirectNet.ResolveAsync($"stub-{Guid.NewGuid():N}.example", [], default,
             (_, _) => Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Any, IPAddress.Loopback]));
 
         Assert.Empty(addresses);

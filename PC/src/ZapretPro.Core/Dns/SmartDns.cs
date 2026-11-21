@@ -435,7 +435,7 @@ public sealed class SmartDns : IAsyncDisposable
         }
     }
 
-    private static async Task<byte[]?> AskTcpAsync(byte[] query, IPEndPoint upstream, CancellationToken ct)
+    internal static async Task<byte[]?> AskTcpAsync(byte[] query, IPEndPoint upstream, CancellationToken ct)
     {
         using var client = new TcpClient(upstream.AddressFamily);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);

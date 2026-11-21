@@ -137,7 +137,7 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
         directHttp.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
 
         var control = OpenAsync(directHttp, ControlUrl, ct);
-        var checks = services.ToDictionary(s => s, s => CheckServiceAsync(direct.Contains(s) ? directHttp : http, s, ct));
+        var checks = services.ToDictionary(s => s, s => CheckServiceAsync(direct.Contains(s) ? directHttp : http, s, ct, direct.Contains(s)));
 
         await Task.WhenAll(checks.Values.Cast<Task>().Append(control));
         var problems = checks
@@ -151,7 +151,8 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
         };
     }
 
-    private async Task<(string? Problem, string? Country, string? ExitIp)> CheckServiceAsync(HttpClient http, Service service, CancellationToken ct)
+    private async Task<(string? Problem, string? Country, string? ExitIp)> CheckServiceAsync(HttpClient http, Service service,
+        CancellationToken ct, bool direct = false)
     {
         switch (service)
         {
@@ -180,6 +181,10 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
 
         var results = await Task.WhenAll(urls.Select(async u => (Url: u, Problem: await OpenAsync(http, u, ct))));
         var failed = results.Where(r => r.Problem is not null).ToList();
+        // Проверка zapret напрямую: не узнали адрес (провайдер то отдаёт его, то нет) — это не провал альта.
+        // Блокировка выглядит иначе: обрыв, сбой TLS, молчание. Менять из-за DNS рабочий альт нельзя
+        if (direct && failed.Count > 0 && failed.All(f => f.Problem == DnsProblem))
+            return (null, null, null);
         return (failed.Count == 0 ? null : string.Join("; ", failed.Select(f => $"{new Uri(f.Url).Host}: {f.Problem}")), null, null);
     }
 
@@ -213,8 +218,11 @@ public sealed class HealthChecker : IHealthProbe, IZapretSpeedProbe
     private static bool IsNetworkError(Exception e, CancellationToken ct) =>
         e is HttpRequestException or TaskCanceledException or SocketException or IOException && !ct.IsCancellationRequested;
 
+    private const string DnsProblem = "не узнал адрес (DNS)";
+
     private static string Describe(Exception e) => e switch
     {
+        HttpRequestException { InnerException: DirectDnsException } => DnsProblem,
         TaskCanceledException => $"нет ответа за {Timeout.TotalSeconds:0} с",
         HttpRequestException { InnerException: SocketException s } => $"не соединиться ({s.SocketErrorCode})",
         HttpRequestException { InnerException: System.Security.Authentication.AuthenticationException } => "сбой TLS (похоже на блокировку)",

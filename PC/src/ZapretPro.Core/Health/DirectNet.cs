@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -37,7 +38,7 @@ public static class DirectNet
         var host = context.DnsEndPoint.Host;
         IReadOnlyList<IPAddress> addresses = IPAddress.TryParse(host, out var literal) ? [literal] : await ResolveAsync(host, dns, ct);
         if (addresses.Count == 0)
-            throw new SocketException((int)SocketError.HostNotFound);
+            throw new DirectDnsException();
 
         Exception? lastError = null;
         foreach (var address in addresses)
@@ -73,15 +74,72 @@ public static class DirectNet
     internal static async Task<IReadOnlyList<IPAddress>> ResolveAsync(string host, IReadOnlyList<IPEndPoint> dns, CancellationToken ct)
         => await ResolveAsync(host, dns, ct, SystemResolveAsync);
 
+    // Последние удачные ответы: провайдер то отдаёт адрес YouTube, то нет — пропуск DNS не должен
+    // выглядеть как «альт не работает»
+    private static readonly ConcurrentDictionary<string, (IReadOnlyList<IPAddress> Addresses, DateTime At)> Known =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan KnownLifetime = TimeSpan.FromDays(1);
+
     internal static async Task<IReadOnlyList<IPAddress>> ResolveAsync(string host, IReadOnlyList<IPEndPoint> dns, CancellationToken ct,
         Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>> system)
     {
-        var query = DnsMessage.Query(host, 1, (ushort)Random.Shared.Next(1, ushort.MaxValue));
-        var answer = await SmartDns.ForwardAsync(query, dns, ct);
-        var addresses = answer is null ? [] : DnsMessage.ReadARecords(answer).Where(IsUsable).ToList();
+        var addresses = await AskProviderAsync(host, dns, ct);
+        if (addresses.Count == 0)
+            addresses = (await system(host, ct)).Where(IsUsable).ToList();
         if (addresses.Count > 0)
+        {
+            Known[host] = (addresses, DateTime.UtcNow);
             return addresses;
-        return (await system(host, ct)).Where(IsUsable).ToList();
+        }
+        return Known.TryGetValue(host, out var known) && DateTime.UtcNow - known.At < KnownLifetime ? known.Addresses : [];
+    }
+
+    /// <summary>
+    /// Каждый сервер провайдера отдельно; берём первый ответ, в котором есть адрес. Пустой ответ по UDP бывает
+    /// подделкой (перехват по дороге) — тогда тот же сервер ещё и по TCP.
+    /// </summary>
+    private static async Task<IReadOnlyList<IPAddress>> AskProviderAsync(string host, IReadOnlyList<IPEndPoint> dns, CancellationToken ct)
+    {
+        if (dns.Count == 0)
+            return [];
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var pending = dns.Select(server => AskServerAsync(host, server, stop.Token)).ToList();
+        var all = pending.ToArray();
+        try
+        {
+            while (pending.Count > 0)
+            {
+                var done = await Task.WhenAny(pending);
+                pending.Remove(done);
+                var addresses = await done;
+                if (addresses.Count > 0)
+                    return addresses;
+            }
+            return [];
+        }
+        finally
+        {
+            stop.Cancel();
+            await Task.WhenAll(all);
+        }
+    }
+
+    private static async Task<IReadOnlyList<IPAddress>> AskServerAsync(string host, IPEndPoint server, CancellationToken ct)
+    {
+        try
+        {
+            var query = DnsMessage.Query(host, 1, (ushort)Random.Shared.Next(1, ushort.MaxValue));
+            var answer = await SmartDns.ForwardAsync(query, [server], ct);
+            var addresses = answer is null ? [] : DnsMessage.ReadARecords(answer).Where(IsUsable).ToList();
+            if (addresses.Count > 0 || ct.IsCancellationRequested)
+                return addresses;
+            var tcp = await SmartDns.AskTcpAsync(query, server, ct);
+            return tcp is null ? [] : DnsMessage.ReadARecords(tcp).Where(IsUsable).ToList();
+        }
+        catch (Exception e) when (e is SocketException or IOException or OperationCanceledException)
+        {
+            return [];
+        }
     }
 
     private static async Task<IReadOnlyList<IPAddress>> SystemResolveAsync(string host, CancellationToken ct)
@@ -162,3 +220,6 @@ public static class DirectNet
     [DllImport("iphlpapi.dll")]
     private static extern int GetBestInterface(uint destAddr, out uint bestIfIndex);
 }
+
+/// <summary>Адрес сайта не узнали ни у провайдера, ни у Windows. Это сбой DNS, а не блокировка: альт тут ни при чём.</summary>
+public sealed class DirectDnsException() : SocketException((int)SocketError.HostNotFound);
