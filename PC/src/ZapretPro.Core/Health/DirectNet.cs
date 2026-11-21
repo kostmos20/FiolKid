@@ -64,13 +64,41 @@ public static class DirectNet
         throw lastError ?? new SocketException((int)SocketError.NotConnected);
     }
 
-    /// <summary>IPv4-адреса имени от DNS провайдера (наша программа ходит к нему мимо фильтра WFP).</summary>
+    /// <summary>
+    /// IPv4-адреса имени: сначала у DNS провайдера (наша программа ходит к нему мимо фильтра WFP). Бывает,
+    /// что провайдер перехватывает обычные DNS-запросы про YouTube и отвечает пустотой, а Windows и браузер
+    /// ходят к тому же 8.8.8.8 зашифрованным DNS и адрес получают. Тогда спрашиваем у Windows: адрес нужен
+    /// только чтобы соединиться, а само соединение всё равно пойдёт напрямую, мимо туннеля.
+    /// </summary>
     internal static async Task<IReadOnlyList<IPAddress>> ResolveAsync(string host, IReadOnlyList<IPEndPoint> dns, CancellationToken ct)
+        => await ResolveAsync(host, dns, ct, SystemResolveAsync);
+
+    internal static async Task<IReadOnlyList<IPAddress>> ResolveAsync(string host, IReadOnlyList<IPEndPoint> dns, CancellationToken ct,
+        Func<string, CancellationToken, Task<IReadOnlyList<IPAddress>>> system)
     {
         var query = DnsMessage.Query(host, 1, (ushort)Random.Shared.Next(1, ushort.MaxValue));
         var answer = await SmartDns.ForwardAsync(query, dns, ct);
-        return answer is null ? [] : DnsMessage.ReadARecords(answer);
+        var addresses = answer is null ? [] : DnsMessage.ReadARecords(answer).Where(IsUsable).ToList();
+        if (addresses.Count > 0)
+            return addresses;
+        return (await system(host, ct)).Where(IsUsable).ToList();
     }
+
+    private static async Task<IReadOnlyList<IPAddress>> SystemResolveAsync(string host, CancellationToken ct)
+    {
+        try
+        {
+            return await System.Net.Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, ct);
+        }
+        catch (SocketException)
+        {
+            return [];
+        }
+    }
+
+    // Заглушки вместо адреса (0.0.0.0, 127.x) — тоже «не узнал»
+    private static bool IsUsable(IPAddress address) =>
+        address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address) && !address.Equals(IPAddress.Any);
 
     /// <summary>Адрес главной сетевой карты (Wi-Fi, кабель) и её DNS. Карты VPN не в счёт.</summary>
     internal static (IPAddress? Local, IReadOnlyList<IPEndPoint> Dns) Physical()

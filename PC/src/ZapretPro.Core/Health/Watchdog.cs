@@ -1114,19 +1114,22 @@ public sealed class Watchdog
     private static string Describe(TimeSpan delay) =>
         delay.TotalMinutes >= 1 ? $"{delay.TotalMinutes:0} мин" : $"{delay.TotalSeconds:0} с";
 
-    /// <summary>Нейросети и то, что zapret отдал в туннель, — проверяем так, как откроет браузер.</summary>
+    /// <summary>
+    /// Нейросети и то, что zapret отдал в туннель, — проверяем так, как откроет браузер. Без ключа нейросети
+    /// не проверяем, а отданное «в туннель» всё равно проверяем: иначе в окне вечно висело бы «проверяю».
+    /// </summary>
     private async Task ProbeVpnAsync(CancellationToken ct)
     {
-        if (!_vpn.HasKey)
+        List<Service> services;
+        lock (_sync)
+            services = [.. _vpn.HasKey ? [Service.Ai] : Array.Empty<Service>(), .. ZapretServices.Where(_zapretFallback.Contains)];
+        if (services.Count == 0)
         {
             lock (_sync)
                 _vpnReport = null;
             Notify();
             return;
         }
-        List<Service> services;
-        lock (_sync)
-            services = [Service.Ai, .. ZapretServices.Where(_zapretFallback.Contains)];
         var report = await _probe.CheckAsync(services, new HashSet<Service>(), ct);
         lock (_sync)
             _vpnReport = report;

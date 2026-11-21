@@ -51,10 +51,16 @@ public sealed class TrayIcon : IDisposable
 
         _engine.StatusChanged += () => System.Windows.Application.Current.Dispatcher.BeginInvoke(Update);
         _engine.Notice += message => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-            _icon.ShowBalloonTip(8000, "FiolKid", message, Forms.ToolTipIcon.Info));
+        {
+            if (!_disposed)
+                _icon.ShowBalloonTip(8000, "FiolKid", message, Forms.ToolTipIcon.Info);
+        });
         _engine.UpdateFound += update => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-            _icon.ShowBalloonTip(10000, $"Вышла версия FiolKid {update.Version}",
-                "Нажми сюда и потом «Обновить» на главном экране. Ключ и настройки сохранятся.", Forms.ToolTipIcon.Info));
+        {
+            if (!_disposed)
+                _icon.ShowBalloonTip(10000, $"Вышла версия FiolKid {update.Version}",
+                    "Нажми сюда и потом «Обновить» на главном экране. Ключ и настройки сохранятся.", Forms.ToolTipIcon.Info);
+        });
         _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _timer.Tick += (_, _) => Update();
         _timer.Start();
@@ -73,6 +79,9 @@ public sealed class TrayIcon : IDisposable
 
     private void Update()
     {
+        // Обновление из очереди могло прийти, когда значок уже убран (выход, установка обновления)
+        if (_disposed)
+            return;
         var state = _engine.OverallState();
         _icon.Icon = _icons[state];
         _icon.Text = state switch
@@ -154,8 +163,11 @@ public sealed class TrayIcon : IDisposable
         return Icon.FromHandle(bitmap.GetHicon());
     }
 
+    private bool _disposed;
+
     public void Dispose()
     {
+        _disposed = true;
         _timer.Stop();
         _icon.Visible = false;
         _icon.Dispose();

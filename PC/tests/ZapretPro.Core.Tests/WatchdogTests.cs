@@ -726,6 +726,25 @@ public sealed class WatchdogTests : IDisposable
     }
 
     [Fact]
+    public async Task Without_key_service_left_for_vpn_is_still_checked_and_not_stuck_on_checking()
+    {
+        _vpn.HasKey = false;
+        _zapret.Works("general", youtube: false, discord: true);
+        _settings.Update(s =>
+        {
+            s.StrategyMode = StrategyModes.Manual;
+            s.ManualStrategyId = "general";
+        });
+
+        await _watchdog.StartAsync(default);
+
+        var report = _watchdog.Status.LastReport!;
+        Assert.True(report.Services.ContainsKey(Service.YouTube));
+        Assert.False(report[Service.YouTube]);
+        Assert.True(report[Service.Discord]);
+    }
+
+    [Fact]
     public async Task Without_key_ai_is_not_checked()
     {
         _vpn.HasKey = false;
