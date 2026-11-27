@@ -745,6 +745,48 @@ public sealed class WatchdogTests : IDisposable
     }
 
     [Fact]
+    public async Task Failed_telegram_retry_goes_back_to_vpn_at_once_and_next_tries_are_rarer()
+    {
+        _zapret.Works("general");
+        await _watchdog.StartAsync(default);
+        _probe.TelegramUpstream = false;
+        await _watchdog.CheckAsync(default);
+        await _watchdog.CheckAsync(default);
+        Assert.Contains(RouteSet.Telegram, _vpn.Routes);
+
+        // Через час проба без VPN: провалилась — обратно на VPN с первой же проверки
+        _time.Advance(TimeSpan.FromHours(1));
+        await _watchdog.CheckAsync(default);
+        Assert.DoesNotContain(RouteSet.Telegram, _vpn.Routes);
+        await _watchdog.CheckAsync(default);
+        Assert.Contains(RouteSet.Telegram, _vpn.Routes);
+
+        // Следующая проба уже не через час, а через три
+        _time.Advance(TimeSpan.FromHours(2));
+        await _watchdog.CheckAsync(default);
+        Assert.Contains(RouteSet.Telegram, _vpn.Routes);
+        _time.Advance(TimeSpan.FromHours(1));
+        await _watchdog.CheckAsync(default);
+        Assert.DoesNotContain(RouteSet.Telegram, _vpn.Routes);
+    }
+
+    [Fact]
+    public async Task Restart_button_keeps_telegram_on_vpn()
+    {
+        _zapret.Works("general");
+        await _watchdog.StartAsync(default);
+        _probe.TelegramUpstream = false;
+        await _watchdog.CheckAsync(default);
+        await _watchdog.CheckAsync(default);
+
+        await _watchdog.RestartTelegramAsync(default);
+
+        Assert.Contains(Service.Telegram, _watchdog.Status.ViaVpn);
+        Assert.Contains(RouteSet.Telegram, _vpn.Routes);
+        Assert.True(_watchdog.Status.LastReport![Service.Telegram]);
+    }
+
+    [Fact]
     public async Task Without_key_ai_is_not_checked()
     {
         _vpn.HasKey = false;

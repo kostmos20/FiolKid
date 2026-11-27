@@ -50,6 +50,11 @@ public sealed record WatchdogOptions
     public TimeSpan MinSwitchInterval { get; init; } = TimeSpan.FromMinutes(15);
     /// <summary>Как часто пробовать вернуться с запасного канала (чтобы не гонять видео через сервер знакомого).</summary>
     public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(1);
+    /// <summary>
+    /// Telegram без VPN снова не заработал — следующие пробы реже (после первой через <see cref="RetryInterval"/>):
+    /// у кого провайдер режет Telegram по адресам, каждая проба — несколько минут без Telegram.
+    /// </summary>
+    public IReadOnlyList<TimeSpan> TelegramLaterRetries { get; init; } = [TimeSpan.FromHours(3), TimeSpan.FromHours(12)];
     /// <summary>Через сколько замер скорости альтов считается устаревшим.</summary>
     public TimeSpan BenchmarkLifetime { get; init; } = TimeSpan.FromDays(7);
     /// <summary>Прогрев перед быстрым отсевом альтов: winws уже сказал, что готов, нужна лишь пауза.</summary>
@@ -114,6 +119,10 @@ public sealed class Watchdog
     private DateTimeOffset? _telegramFallbackSince;
     private int _telegramFailures;
     private string? _telegramNote;
+    /// <summary>Сейчас проба «без запасного канала»: провалится — сразу обратно на VPN, не ждём второй проверки.</summary>
+    private bool _telegramTrial;
+    /// <summary>Сколько проб без VPN подряд провалились — от этого зависит, когда пробовать снова.</summary>
+    private int _telegramRetries;
 
     // ---- VPN ----
     private VpnStatus _vpnStatus = VpnStatus.Initial;
@@ -233,6 +242,8 @@ public sealed class Watchdog
             _telegramFallbackSince = null;
             _telegramFailures = 0;
             _telegramNote = null;
+            _telegramTrial = false;
+            _telegramRetries = 0;
             _deferred = false;
             _lastDeferReason = null;
             _appliedSets = null;
@@ -831,17 +842,9 @@ public sealed class Watchdog
         {
             if (!_running)
                 return;
+            // Запасной канал не снимаем: если Telegram без VPN не работал, перезапуск прокси этого не изменит
             Write("Перезапускаю прокси Telegram по просьбе");
             _telegram.Stop();
-            bool hadFallback;
-            lock (_sync)
-            {
-                hadFallback = _telegramFallbackSince is not null;
-                _telegramFallbackSince = null;
-                _telegramFailures = 0;
-            }
-            if (hadFallback)
-                RequestVpn();
             await EnsureTelegramAsync(ct);
             await ProbeTelegramAsync(ct);
         }
@@ -880,15 +883,26 @@ public sealed class Watchdog
             RequestVpn();
     }
 
+    private TimeSpan TelegramRetryAfter() =>
+        _telegramRetries == 0 || _options.TelegramLaterRetries.Count == 0
+            ? _options.RetryInterval
+            : _options.TelegramLaterRetries[Math.Min(_telegramRetries - 1, _options.TelegramLaterRetries.Count - 1)];
+
+    private static string Hours(TimeSpan span) => span == TimeSpan.FromHours(1) ? "час" : $"{span.TotalHours:0} ч";
+
     private (bool Changed, string? Message) UpdateTelegramFallbackLocked(HealthReport report)
     {
         if (_telegramFallbackSince is { } since)
         {
-            if (_time.GetUtcNow() - since < _options.RetryInterval)
+            var after = TelegramRetryAfter();
+            if (_time.GetUtcNow() - since < after)
                 return (false, null);
             _telegramFallbackSince = null;
             _telegramFailures = 0;
-            return (true, "Прошёл час — пробую Telegram без запасного канала");
+            _telegramTrial = true;
+            return (true, after == TimeSpan.FromHours(1)
+                ? "Прошёл час — пробую Telegram без запасного канала"
+                : $"Прошло {Hours(after)} — пробую Telegram без запасного канала");
         }
 
         // Нет интернета вообще — это не поломка прокси
@@ -896,10 +910,16 @@ public sealed class Watchdog
         {
             _telegramFailures = 0;
             _telegramNote = null;
+            if (report[Service.Telegram] && _telegramTrial)
+            {
+                _telegramTrial = false;
+                _telegramRetries = 0;
+            }
             return (false, null);
         }
 
-        if (++_telegramFailures < _options.FailuresBeforeSwitch)
+        // Проба без VPN провалилась — обратно сразу: без VPN он уже не работал, второй проверки не ждём
+        if (++_telegramFailures < (_telegramTrial ? 1 : _options.FailuresBeforeSwitch))
             return (false, null);
         if (!VpnAlive(_vpnStatus))
         {
@@ -910,6 +930,12 @@ public sealed class Watchdog
         }
         _telegramNote = null;
         _telegramFallbackSince = _time.GetUtcNow();
+        if (_telegramTrial)
+        {
+            _telegramTrial = false;
+            _telegramRetries++;
+            return (true, $"Telegram без запасного канала так и не заработал — снова через VPN, следующая проба через {Hours(TelegramRetryAfter())}");
+        }
         return (true, "Telegram не работает через прокси — включаю запасной канал");
     }
 
